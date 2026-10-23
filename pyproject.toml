@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "duvera-music-director"
+version = "0.1.0"
+description = "Dialogue-aware music spotting, generation, editing and mastering for long-form video"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24,<3", "scipy>=1.10,<2", "pydantic>=2.6,<3"]
+
+[project.optional-dependencies]
+asr = ["faster-whisper>=1.1,<2"]
+mir = ["librosa>=0.10.2,<1"]
+browser = ["playwright>=1.48,<2"]
+timeline = ["opentimelineio>=0.17,<1"]
+dev = ["ruff>=0.8,<1"]
+
+[project.scripts]
+duvera-music = "src.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

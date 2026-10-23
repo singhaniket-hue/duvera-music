@@ -1,0 +1,8 @@
+{
+  "script_path": "duvera_hinglish.txt",
+  "language": "hinglish",
+  "mode": "script_only",
+  "provider": "none",
+  "planner": "rules",
+  "output_dir": "../agent_output/hinglish_script"
+}

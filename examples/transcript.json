@@ -1,0 +1,8 @@
+{
+  "timing_source": "supplied",
+  "segments": [
+    {"start": 0, "end": 4, "text": "You learned to do everything yourself."},
+    {"start": 4, "end": 9, "text": "The truth is, asking for help can feel unfamiliar."},
+    {"start": 9, "end": 12, "text": "Start with one safe person and one small request."}
+  ]
+}

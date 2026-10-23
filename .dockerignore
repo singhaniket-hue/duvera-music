@@ -1,0 +1,8 @@
+.git
+.venv
+.env*
+chrome_google_flow_profile
+agent_output
+demo_media
+demo_output
+upload

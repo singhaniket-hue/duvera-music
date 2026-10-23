@@ -1,0 +1,48 @@
+# Agent setup and operating protocol
+
+This is the Duvera Music Director Python CLI. Read README.md before changing workflows.
+
+## Setup
+
+Run python scripts/bootstrap.py and then the virtual-environment Python with
+-m src.cli --check-env. Install extras only when needed. System package installation
+requires the explicit bootstrap flag; do not assume administrator privileges.
+
+## Understand the user's requested output
+
+Determine mode (script_only, assets_and_script, final_video), spoken language
+(english, hinglish, hindi), source media/reference script, and music provider.
+Use answers already supplied by the user. Ask only for information genuinely missing.
+For planning/building this repository, do not confuse the research brief with a media input.
+Use JSON configs/flags in agent subprocesses; never start an input() wizard without a TTY.
+
+## Credentials, providers and spend
+
+Never ask for passwords or API keys in chat or put them into commits, CLI arguments or logs.
+Use secure environment configuration or download assets through an authorized connector.
+Python cannot silently inherit a ChatGPT plugin session.
+A Google profile directory is not evidence of authentication. Use the visible login helper
+on the user's own computer or use imported assets. Do not bypass provider security checks.
+
+Review generation_plan.json before credit-consuming generation. Respect user authorization
+and max duration/request limits. Never retry a pending ledger entry without checking whether
+the provider already charged/generated it. Never claim live provider testing from mocks.
+
+## Implementation
+
+Contracts: src/models.py. CLI: src/cli.py. Pipeline: src/pipeline.py.
+Audio: src/dsp.py and src/media.py. Providers: src/providers/.
+All timeline data is in seconds; convert to frames only at XML export.
+Preserve dialogue and remove music/SFX during protected silence.
+Never label inferred onsets as verified downbeats, estimated script timing as aligned timing,
+or source band energy as measured human intelligibility.
+
+Run python -m unittest discover -s tests -v and ruff check . for implementation changes.
+Tests must not make billable external calls. Use the offline demo for full render validation.
+Report artistic/provider/NLE limitations honestly.
+
+## Publication
+
+Do not commit .env files, browser profiles, user transcripts/media, generated outputs or
+credential artifacts. Include code, text examples, schemas, CI and documentation.
+Use a fresh output directory when inputs/parameters change.

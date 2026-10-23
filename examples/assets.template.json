@@ -1,0 +1,5 @@
+{
+  "music": {"cue_001": "/absolute/path/to/your-downloaded-music.mp3"},
+  "sfx": {},
+  "downbeats": {"cue_001": 1.2}
+}
