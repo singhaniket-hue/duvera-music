@@ -46,3 +46,22 @@ that the remote workflow has run.
   supplied attachment, so this is not a claim of a newly rendered, corrected version of it.
 - Live generation, optional MIR dependencies, artistic/harmonic loop quality and NLE imports
   retain the verification limits listed above.
+
+## Instrumental/vocal gate and outro update — 24 October 2026
+
+- The existing ElevenLabs adapter already set force_instrumental=true. The actual cause
+  of the reported Render #2 singing cannot be attributed without its raw cue/request records.
+- Added canonical prompt enforcement at planner/store/provider boundaries.
+- Added a default fail-closed Demucs gate covering generated, cached and imported music.
+  Controlled separator fixtures verify rejection, strip/recheck, content reuse, scale invariance,
+  short bursts, error reporting, and blocking before paid generation/rendering.
+- Added a pre-boundary transient preference, main-cue outro reuse, and regression coverage
+  for broad LLM silence covering a CTA.
+- Real FFmpeg tests still verify narration preservation and music/SFX silence.
+- Demucs, PyTorch and model weights are not installed in this build environment. Acoustic
+  separation/detection and the heavy optional-dependency installation were not exercised.
+  The tests validate gate logic with deterministic synthetic separator outputs.
+- No second-render music stem was supplied in this turn, so no claim is made of removing
+  its reported singer or producing Render #3.
+- All 42 local unit/integration tests and Ruff checks passed. The real-render tests use
+  procedural audio; the vocal-gate tests use explicitly controlled separation fixtures.

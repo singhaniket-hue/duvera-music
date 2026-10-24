@@ -27,6 +27,8 @@ def export_script(sheet: SpottingSheet, transcript: Transcript, config: RunConfi
                   f"Tempo suggestion: **{cue.target_bpm} BPM** (half/double-time alternatives may fit).",
                   f"Dialogue/music gap target: {cue.target_lu_gap} LU; depth: {cue.depth_profile}; exit: {cue.exit_type}.",
                   f"Music LPF override: {cue.lowpass_hz or 'depth default'} Hz; bounded exit tail: {cue.exit_tail_ms} ms.",
+                  f"Music source: {cue.reuse_music_from or 'own cue'}; "
+                  f"pre-silence transient target: {cue.exit_anchor_before_sec or 'automatic'} sec before boundary.",
                   "Mix: music HPF 45 Hz; depth LPF; center presence reduction up to 3.5 dB at 1.5–4 kHz "
                   "during speech; bounded 12 dB momentary-loudness ducking; 15 ms exit fade.",
                   "Entry: use a supplied downbeat offset when available; automatic onset entry is not a verified downbeat.",

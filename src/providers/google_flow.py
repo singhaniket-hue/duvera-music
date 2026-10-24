@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from ..media import PipelineError
+from ..music_policy import instrumental_prompt
 
 
 def load_browser_config(path: Path) -> dict:
@@ -49,6 +50,8 @@ class GoogleFlowProvider:
     def generate(self, prompt: str, duration: float, kind: str, destination: Path):
         if kind == "sfx":
             prompt = "Sound effect only, no melody: " + prompt
+        else:
+            prompt = instrumental_prompt(prompt)
         downloads = self.locator("download")
         previous = downloads.count()
         self.locator("prompt").fill(f"{prompt} Duration approximately {duration:.1f} seconds.")

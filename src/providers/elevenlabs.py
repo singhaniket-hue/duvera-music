@@ -6,6 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from ..media import PipelineError
+from ..music_policy import instrumental_prompt
 
 
 class ElevenLabsProvider:
@@ -20,7 +21,7 @@ class ElevenLabsProvider:
             if not 3 <= duration <= 600:
                 raise PipelineError("ElevenLabs music length must be 3–600 seconds")
             return "/music?output_format=mp3_48000_192", {
-                "prompt": prompt, "music_length_ms": round(duration * 1000),
+                "prompt": instrumental_prompt(prompt), "music_length_ms": round(duration * 1000),
                 "model_id": "music_v2", "force_instrumental": True,
             }
         if not 0.5 <= duration <= 30:

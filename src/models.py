@@ -81,6 +81,8 @@ class MusicCue(Contract):
     bridge_sfx_prompt: str | None = None
     lowpass_hz: int | None = Field(default=None, ge=1000, le=20000)
     exit_tail_ms: float = Field(default=0, ge=0, le=500)
+    exit_anchor_before_sec: float | None = Field(default=None, ge=0.15, le=1)
+    reuse_music_from: str | None = Field(default=None, pattern=r"^cue_[0-9]{3}$")
 
     @model_validator(mode="after")
     def ordered(self):
@@ -105,7 +107,7 @@ class VisualEvent(Contract):
 
 
 class SpottingSheet(Contract):
-    schema_version: str = "1.1"
+    schema_version: str = "1.2"
     video_duration_sec: float = Field(gt=0)
     dialogue_integrated_lufs: float | None = None
     timing_source: Literal["asr", "supplied", "estimated"]
@@ -120,6 +122,8 @@ class SpottingSheet(Contract):
         if len({c.cue_id for c in self.cues}) != len(self.cues):
             raise ValueError("Cue IDs must be unique")
         for i, c in enumerate(self.cues):
+            if c.reuse_music_from and c.reuse_music_from not in {x.cue_id for x in self.cues[:i]}:
+                raise ValueError("Music reuse must reference an earlier cue")
             if c.end_sec > self.video_duration_sec + 0.001:
                 raise ValueError("Cue exceeds media duration")
             if i and c.start_sec < self.cues[i - 1].end_sec - 0.001:
@@ -165,6 +169,12 @@ class RunConfig(Contract):
     visual_sample_fps: int = Field(default=4, ge=2, le=12)
     beats_per_bar: int = Field(default=4, ge=1, le=12)
     loop_crossfade_ms: float = Field(default=40, ge=3, le=200)
+    vocal_policy: Literal["reject", "strip", "off"] = "reject"
+    vocal_threshold_dbfs: float = Field(default=-35, ge=-80, le=-20)
+    vocal_model: str = Field(default="htdemucs", pattern=r"^[A-Za-z0-9_-]{1,60}$")
+    vocal_device: Literal["cpu", "cuda", "mps"] = "cpu"
+    outro_music_return: bool = True
+    outro_return_sec: float | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def coherent(self):

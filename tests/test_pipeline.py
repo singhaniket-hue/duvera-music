@@ -135,7 +135,7 @@ class RealMediaIntegration(unittest.TestCase):
     def config(self, **changes):
         data = dict(video_path=self.root / "raw.mp4", transcript_path=self.root / "transcript.json",
                     mode="final_video", provider="local", local_assets=self.root / "assets.json",
-                    cue_seconds=3, output_dir=self.root / "render")
+                    cue_seconds=3, output_dir=self.root / "render", vocal_policy="off")
         data.update(changes)
         return RunConfig(**data)
 

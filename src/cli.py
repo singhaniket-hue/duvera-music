@@ -47,6 +47,14 @@ def parser():
     p.add_argument("--black-min-duration-sec", type=float)
     p.add_argument("--beats-per-bar", type=int)
     p.add_argument("--loop-crossfade-ms", type=float)
+    p.add_argument("--vocal-policy", choices=["reject", "strip", "off"])
+    p.add_argument("--vocal-threshold-dbfs", type=float)
+    p.add_argument("--vocal-model")
+    p.add_argument("--vocal-device", choices=["cpu", "cuda", "mps"])
+    outro = p.add_mutually_exclusive_group()
+    outro.add_argument("--outro-music-return", dest="outro_music_return", action="store_true", default=None)
+    outro.add_argument("--no-outro-music-return", dest="outro_music_return", action="store_false", default=None)
+    p.add_argument("--outro-return-sec", type=float)
     return p
 
 

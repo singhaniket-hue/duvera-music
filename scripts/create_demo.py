@@ -41,7 +41,7 @@ def create_demo(root: Path, seconds=12) -> Path:
            "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", root / "raw.mp4")
     config = RunConfig(video_path=root / "raw.mp4", transcript_path=root / "transcript.json",
                        mode="final_video", provider="local", local_assets=root / "assets.json",
-                       cue_seconds=max(3, seconds / 3 + 0.1), output_dir=root / "output")
+                       cue_seconds=max(3, seconds / 3 + 0.1), output_dir=root / "output", vocal_policy="off")
     sheet = rules_plan(transcript, seconds, config)
     # Fixed supplied downbeat offsets make offline entry behavior deterministic.
     assets = {"music": {c.cue_id: "music.wav" for c in sheet.cues},

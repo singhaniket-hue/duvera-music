@@ -9,7 +9,7 @@ import numpy as np
 from scipy.signal import butter, lfilter, sosfilt
 
 from .analyzer import onset_analysis
-from .media import SR, ffmpeg, loudness, normalize, read_audio, write_audio
+from .media import PipelineError, SR, ffmpeg, loudness, normalize, read_audio, write_audio
 from .models import MusicCue, RunConfig, SpottingSheet
 from .narrative import fully_silent
 from .rhythm import fit_music, plan_loop
@@ -40,7 +40,7 @@ def interpolate(times: np.ndarray, values: np.ndarray, count: int, sr: int = SR)
     return np.interp(np.arange(count) / sr, times, values).astype(np.float32)
 
 
-def transient_exit(audio: np.ndarray, tail_ms: float) -> tuple[np.ndarray, dict]:
+def transient_exit(audio: np.ndarray, tail_ms: float, anchor_before_sec: float | None = None) -> tuple[np.ndarray, dict]:
     """Choose a strong late onset and fit decay/reverb BEFORE the protected boundary."""
     count = len(audio)
     tail = round(tail_ms / 1000 * SR)
@@ -56,7 +56,13 @@ def transient_exit(audio: np.ndarray, tail_ms: float) -> tuple[np.ndarray, dict]
     flux = np.maximum(0, np.diff(rms, prepend=rms[0]))
     if flux.max(initial=0) < 1e-6:
         return audio, {"method": "microfade_only", "tail_ms": 0}
-    onset = first + int(np.argmax(flux)) * hop
+    target = (count / SR - anchor_before_sec) if anchor_before_sec is not None else None
+    salience = flux
+    if target is not None:
+        times = (first + np.arange(len(flux)) * hop) / SR
+        # Prefer the actual pluck nearest the requested pre-boundary accent, never synthesize one.
+        salience = flux * np.exp(-0.5 * ((times - target) / 0.12) ** 2)
+    onset = first + int(np.argmax(salience)) * hop
     dry_end = min(count, onset + decay)
     result = audio.copy()
     source = audio[max(onset, dry_end - round(0.05 * SR)):dry_end]
@@ -73,7 +79,8 @@ def transient_exit(audio: np.ndarray, tail_ms: float) -> tuple[np.ndarray, dict]
         result[dry_end - fade:dry_end] *= np.linspace(1, 0, fade)[:, None]
         result[-fade:] *= np.linspace(1, 0, fade)[:, None]
     return result, {"method": "strong_late_onset_with_bounded_tail",
-                    "onset_sec": onset / SR, "dry_end_sec": dry_end / SR, "tail_ms": tail_ms}
+                    "onset_sec": onset / SR, "dry_end_sec": dry_end / SR, "tail_ms": tail_ms,
+                    "target_onset_sec": target}
 
 
 def silence_envelope(count: int, offset: float, sheet: SpottingSheet) -> np.ndarray:
@@ -163,6 +170,7 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path,
     bed_path, sfx_path = root / "music.wav", root / "sfx.wav"
     records, cursor = [], 0
     previous_source, phase_origin, previous_cutoff = None, 0, None
+    lookup = {c.cue_id: c for c in sheet.cues}
     with wave.open(str(bed_path), "wb") as bed, wave.open(str(sfx_path), "wb") as sfx:
         for w in (bed, sfx):
             w.setnchannels(2)
@@ -178,7 +186,10 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path,
                 for w in (bed, sfx):
                     _write_frames(w, np.zeros((block, 2), np.float32))
                 gap -= block
-            source = root / "stems" / f"{cue.cue_id}_music.wav"
+            source_id = cue.cue_id
+            while lookup[source_id].reuse_music_from:
+                source_id = lookup[source_id].reuse_music_from
+            source = getattr(store, "safe_music", {}).get(source_id)
             if fully_silent(cue.start_sec, cue.end_sec, sheet.silence_windows):
                 silence = np.zeros((end - start, 2), np.float32)
                 write_audio(root / "stems" / f"{cue.cue_id}_prepared.wav", silence)
@@ -190,9 +201,13 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path,
                                 "control": {"gap_control": "protected_silence"},
                                 "speech_band_music_to_voice_db": None})
                 continue
+            if source is None:
+                if config is None or config.vocal_policy != "off":
+                    raise PipelineError(f"Missing vocal-gate approval for {source_id}")
+                source = root / "stems" / f"{source_id}_music.wav"
             analysis = onset_analysis(source)
             raw, _ = read_audio(source)
-            manual_downbeat = store.assets["downbeats"].get(cue.cue_id)
+            manual_downbeat = store.assets["downbeats"].get(source_id)
             if manual_downbeat is not None:
                 if not 0 <= float(manual_downbeat) < len(raw) / SR:
                     raise ValueError("Supplied downbeat offset outside asset")
@@ -203,9 +218,9 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path,
                 first = analysis["onsets"][0] if analysis["onsets"] else 0
                 entry = first if first < 3 else 0
             seconds = (end - start) / SR
-            loop = plan_loop(raw, analysis, entry, store.assets.get("loops", {}).get(cue.cue_id),
+            loop = plan_loop(raw, analysis, entry, store.assets.get("loops", {}).get(source_id),
                              config.beats_per_bar if config else 4)
-            source_identity = (store.assets["music"].get(cue.cue_id, source),
+            source_identity = (store.assets["music"].get(source_id, source),
                                loop["start_sec"], loop["end_sec"])
             if source_identity != previous_source:
                 phase_origin = cue.start_sec
@@ -222,7 +237,7 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path,
                         time += period
             exit_record = None
             if cue.exit_type == "transient_stop":
-                music, exit_record = transient_exit(music, cue.exit_tail_ms)
+                music, exit_record = transient_exit(music, cue.exit_tail_ms, cue.exit_anchor_before_sec)
             voice = read_dialogue_window(dialogue, cue.start_sec, end - start) if dialogue else None
             processed, metrics = duck(music, voice, cue, previous_cutoff)
             previous_source = source_identity
@@ -260,6 +275,7 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path,
             records.append({"cue_id": cue.cue_id, "entry_offset_sec": entry, "analysis": analysis,
                             "loop": loop, "loop_phase_sec": phase, "exit": exit_record,
                             "timeline_onsets_sec": sorted(timeline_onsets),
+                            "music_source_cue_id": source_id,
                             "lowpass_hz": previous_cutoff, "control": metrics,
                             "speech_band_music_to_voice_db": overlap_db})
         tail = round(sheet.video_duration_sec * SR) - cursor

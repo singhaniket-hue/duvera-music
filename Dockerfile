@@ -3,7 +3,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -r
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir .
+ARG INSTALL_VOCALS=0
+RUN if [ "$INSTALL_VOCALS" = "1" ]; then pip install --no-cache-dir ".[vocals]"; else pip install --no-cache-dir .; fi
 RUN useradd --create-home director
 USER director
 WORKDIR /work

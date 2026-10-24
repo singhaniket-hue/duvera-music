@@ -12,6 +12,10 @@ Primary implementation references checked during the build:
 - https://www.itu.int/rec/R-REC-BS.1770 — framework for program loudness measurement.
 - https://librosa.org/doc/0.11.0/generated/librosa.beat.beat_track.html — beat tracking,
   not meter/downbeat inference.
+- https://github.com/facebookresearch/demucs/blob/main/demucs/separate.py — two-stem separation,
+  float WAV output, and no_vocals backing generation.
+- https://github.com/facebookresearch/demucs/blob/main/demucs/audio.py — stem clipping/rescaling
+  behavior; the gate avoids relying on independently rescaled stem levels.
 
 Important corrections to the sample implementation in the brief:
 
@@ -37,6 +41,11 @@ Implemented choices:
   This uses no OCR; it does not understand text or classify narrative emotion from images.
   Beat-quantized loops preserve their exact period and report bar-phase uncertainty.
   Verified loop endpoints remain the reliable option for irregular/ambiguous music.
+- Vocal-check update: every music request has a provider-bound instrumental contract.
+  Demucs's estimated vocal-stem energy is used as a level-normalized rejection proxy.
+  It can misassign instruments or miss vocals; 800 Hz–3.5 kHz energy alone is not a
+  reliable vocal detector. Reject is the default, strip-and-recheck is optional.
+  No real model/weights evaluation was performed in the build environment.
 - K-weighting is implemented at the fixed internal 48 kHz sample rate. 400 ms control
   windows are momentary energy estimates without integrated gating. Final integrated
   loudness and true peak come from FFmpeg loudnorm.

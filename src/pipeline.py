@@ -19,6 +19,7 @@ from .providers import AssetStore, generation_jobs, validate_manifest_for_sheet
 from .providers.elevenlabs import ElevenLabsProvider
 from .providers.google_flow import GoogleFlowProvider, load_browser_config
 from .visuals import analyze_video
+from .vocals import VocalGuard
 
 
 def save_json(path: Path, value):
@@ -37,7 +38,7 @@ def _fingerprint(config: RunConfig) -> str:
                     raise PipelineError(f"Input file not found: {value}")
                 stat = value.stat()
                 files[name] = [str(value.resolve()), stat.st_size, stat.st_mtime_ns]
-    return hashlib.sha256(json.dumps(["narrative-loop-v2", data, files], sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(["vocal-gate-v3", data, files], sort_keys=True).encode()).hexdigest()
 
 
 def _branches(config: RunConfig):
@@ -144,6 +145,10 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
     if config.mode == "script_only" or plan_only:
         return {"status": "planned", "output_dir": str(root.resolve()), "timing_source": sheet.timing_source}
     planned = _gate(config, sheet)
+    guard = VocalGuard(config, root / "vocal_checks")
+    # Validate checker/model/device before any provider generates credit-consuming audio.
+    if any(kind == "music" for _, kind, _, _ in generation_jobs(sheet)):
+        guard.prepare()
     providers = {}
     try:
         # Open/check Google first, before spending on ElevenLabs in comparison mode.
@@ -156,12 +161,18 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
             branch = root / name
             branch.mkdir(exist_ok=True)
             store = AssetStore(branch / "stems", config, manifest, providers.get(name))
+            store.safe_music = {}
             for cue, kind, seconds, prompt in generation_jobs(sheet):
-                store.get(cue.cue_id, prompt, seconds, kind)
+                asset = store.get(cue.cue_id, prompt, seconds, kind)
+                if kind == "music":
+                    store.safe_music[cue.cue_id] = guard.inspect(f"{name}/{cue.cue_id}", asset)
             music, sfx, records = build_stems(sheet, store, dialogue, branch, config)
             export_script(sheet, transcript, config, branch)
             export_timeline(sheet, config, branch, records, dialogue)
-            qc = {"provider": name, "source": planned[name], "cues": records, "mastering": None}
+            qc = {"provider": name, "source": planned[name], "cues": records, "mastering": None,
+                  "vocal_policy": config.vocal_policy,
+                  "vocal_checks": {key.split("/", 1)[1]: value for key, value in guard.reports.items()
+                                   if key.startswith(name + "/")}}
             if config.mode == "final_video":
                 qc["mastering"] = render(dialogue, music, sfx, branch, config)
             save_json(branch / "qc_report.json", qc)
@@ -171,7 +182,9 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
         qc_passed = all(q["mastering"] is None or q["mastering"]["passed"] for q in results.values())
         summary = {"status": "complete" if qc_passed else "qc_failed",
                    "output_dir": str(root.resolve()), "providers": list(results),
-                   "timing_source": sheet.timing_source}
+                   "timing_source": sheet.timing_source,
+                   "vocal_check": ("not_required_no_music" if not guard.reports else
+                                   "disabled_unchecked" if config.vocal_policy == "off" else "model_proxy_checked")}
         save_json(root / "run_summary.json", summary)
         return summary
     finally:

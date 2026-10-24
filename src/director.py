@@ -10,6 +10,7 @@ from .linguistics import cadence
 from .media import PipelineError
 from .models import MusicCue, RunConfig, SilenceWindow, SpottingSheet, Transcript, VisualEvent
 from .narrative import protect_narrative
+from .music_policy import instrumental_prompt
 
 PIVOTS = ("the truth", "i'm fine", "i was afraid", "sach", "asli problem", "aap sochiye", "सच", "असली")
 SPOTTING_RULES = """
@@ -78,7 +79,7 @@ def rules_plan(transcript: Transcript, duration: float, config: RunConfig,
     sheet = SpottingSheet(video_duration_sec=duration, dialogue_integrated_lufs=dialogue_lufs,
                           timing_source=transcript.timing_source, cues=cues,
                           silence_windows=silence, warnings=warnings)
-    return protect_narrative(sheet, transcript, visuals)
+    return protect_narrative(sheet, transcript, visuals, config)
 
 
 def plan(transcript: Transcript, duration: float, config: RunConfig,
@@ -121,13 +122,13 @@ def plan(transcript: Transcript, duration: float, config: RunConfig,
         result.dialogue_integrated_lufs = dialogue_lufs
         result.planner = "llm"
         result.warnings = list(dict.fromkeys(result.warnings + baseline.warnings))
-        return protect_narrative(result, transcript, visuals)
+        return protect_narrative(result, transcript, visuals, config)
     except Exception as exc:
         raise PipelineError("LLM request or schema validation failed; no generation was started") from exc
 
 
 def music_prompt(cue: MusicCue) -> str:
-    return (f"{', '.join(cue.mood_descriptors)}; {cue.target_bpm} BPM; "
+    return instrumental_prompt(f"{', '.join(cue.mood_descriptors)}; {cue.target_bpm} BPM; "
             f"{', '.join(cue.allowed_instruments)}; {cue.narrative_purpose}. "
             "Instrumental only. No vocals, choir, spoken words or lyrics. Sparse arrangement, "
             "leave space for dialogue at 1-4 kHz; avoid dense sustained guitars/pads, "

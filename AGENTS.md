@@ -28,6 +28,13 @@ Review generation_plan.json before credit-consuming generation. Respect user aut
 and max duration/request limits. Never retry a pending ledger entry without checking whether
 the provider already charged/generated it. Never claim live provider testing from mocks.
 
+Music requests must retain the canonical instrumental contract at every provider boundary.
+The default vocal_policy=reject requires the vocals extra and a working Demucs model/device.
+Never disable it implicitly after a dependency/model failure. Stripping applies only to music,
+never narration. Review vocal_checks/vocal_qc.json; a separation-energy proxy is not proof
+that singing is absent. Do not regenerate paid assets automatically after rejection.
+Synthetic test fixtures explicitly use off and report disabled_unchecked.
+
 ## Implementation
 
 Contracts: src/models.py. CLI: src/cli.py. Pipeline: src/pipeline.py.

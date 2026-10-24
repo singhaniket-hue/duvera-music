@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .models import SilenceWindow, SpottingSheet, Transcript, VisualEvent
+from .models import RunConfig, SilenceWindow, SpottingSheet, Transcript, VisualEvent
 
 # Contrast alone changes color; it does not automatically mute every 'but' or 'lekin'.
 CONTRAST = ("par pata nahi kyun", "par pata nahin kyun", "didn't enjoy", "did not enjoy",
@@ -45,6 +45,10 @@ def narrative_events(transcript: Transcript) -> list[dict]:
         # Several word-anchored turns may occur inside one ASR chunk. Without words, retain
         # the earliest textual turn rather than pretending to know later timestamps.
         anchored = [e for e in found if e["anchor"] == "word"]
+        resume = next((e for e in found if e["kind"] == "resume"), None)
+        if resume:
+            # A callback inside the closing CTA is not a second punchline mute.
+            anchored = [e for e in anchored if e["kind"] != "twist" or e["text_offset"] < resume["text_offset"]]
         events.extend(anchored if anchored else sorted(found, key=lambda e: e["text_offset"])[:1])
     return sorted(events, key=lambda e: (e["start"], e["text_offset"]))
 
@@ -62,12 +66,20 @@ def fully_silent(start: float, end: float, windows: list[SilenceWindow]) -> bool
 
 
 def protect_narrative(sheet: SpottingSheet, transcript: Transcript,
-                      visuals: list[VisualEvent] | None = None) -> SpottingSheet:
+                      visuals: list[VisualEvent] | None = None, config: RunConfig | None = None) -> SpottingSheet:
     result = sheet.model_copy(deep=True)
-    result.schema_version = "1.1"
+    result.schema_version = "1.2"
     result.visual_events = visuals or []
     events = narrative_events(transcript)
-    resumes = sorted(e["start"] for e in events if e["kind"] == "resume")
+    return_enabled = config.outro_music_return if config else True
+    if config and config.outro_return_sec is not None:
+        if config.outro_return_sec >= result.video_duration_sec:
+            raise ValueError("outro_return_sec must precede media end")
+        events = [e for e in events if e["kind"] != "resume"]
+        events.append({"start": config.outro_return_sec, "end": result.video_duration_sec,
+                       "kind": "resume", "anchor": "manual", "text_offset": 0})
+        events.sort(key=lambda e: (e["start"], e["text_offset"]))
+    resumes = sorted(e["start"] for e in events if e["kind"] == "resume") if return_enabled else []
     windows = list(result.silence_windows)
     for event in events:
         if event["kind"] == "twist":
@@ -86,6 +98,12 @@ def protect_narrative(sheet: SpottingSheet, transcript: Transcript,
             end = resume
         windows.append(SilenceWindow(start_sec=visual.start_sec, end_sec=end,
                                       reason="Abrupt sustained black-card boundary; music/SFX stop, dialogue continues"))
+    # An LLM may have authored a broad silence through the CTA. Apply the explicit return
+    # policy to that window too, rather than merging it back over the shortened visual window.
+    for window in windows:
+        resume = next((x for x in resumes if window.start_sec < x < window.end_sec), None)
+        if resume is not None:
+            window.end_sec = resume
     # Merge adjacent or overlapping protections; use exact protected endpoints.
     merged = []
     for window in sorted(windows, key=lambda s: s.start_sec):
@@ -107,6 +125,7 @@ def protect_narrative(sheet: SpottingSheet, transcript: Transcript,
         for start, end in zip(points, points[1:]):
             cue = original.model_copy(deep=True)
             cue.start_sec, cue.end_sec = start, end
+            cue.reuse_music_from = None
             # A split clip is not a newly generated transition. Preserve authored SFX only at the old end.
             if end < original.end_sec - 0.001:
                 cue.bridge_sfx_prompt = None
@@ -124,11 +143,21 @@ def protect_narrative(sheet: SpottingSheet, transcript: Transcript,
                 cue.depth_profile, cue.lowpass_hz = "background", 9500
             if any(abs(end - w.start_sec) < 0.001 for w in merged):
                 cue.exit_type, cue.exit_tail_ms, cue.bridge_sfx_prompt = "transient_stop", 200, None
+                cue.exit_anchor_before_sec = 0.5
             if fully_silent(start, end, merged):
                 cue.narrative_purpose = "Protected narrative silence (dialogue only)"
                 cue.bridge_sfx_prompt, cue.exit_type, cue.exit_tail_ms = None, "crossfade", 0
             cue.cue_id = f"cue_{len(cues) + 1:03}"
             cues.append(cue)
+    if return_enabled:
+        for cue in cues:
+            follows_silence = any(abs(cue.start_sec - w.end_sec) < 0.001 for w in merged)
+            at_resume = any(abs(cue.start_sec - x) < 0.001 for x in resumes)
+            if follows_silence and at_resume and not fully_silent(cue.start_sec, cue.end_sec, merged):
+                first = next((c for c in cues if c.end_sec <= cue.start_sec and
+                              not fully_silent(c.start_sec, c.end_sec, merged)), None)
+                if first:
+                    cue.reuse_music_from = first.cue_id
     result.cues = cues
     result.warnings = list(dict.fromkeys(result.warnings + [
         "Narrative phrase anchors use word timestamps when supplied, otherwise segment starts; review intent.",

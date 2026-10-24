@@ -10,6 +10,7 @@ from ..director import music_prompt
 from ..media import PipelineError, extract_audio, probe
 from ..models import RunConfig, SpottingSheet
 from ..narrative import fully_silent
+from ..music_policy import instrumental_prompt
 
 
 class AudioProvider(Protocol):
@@ -44,6 +45,8 @@ class AssetStore:
         temp.replace(self.ledger_path)
 
     def get(self, cue_id: str, prompt: str, duration: float, kind: str) -> Path:
+        if kind == "music":
+            prompt = instrumental_prompt(prompt)
         key = f"{cue_id}_{kind}"
         output = self.root / f"{key}.wav"
         if cue_id in self.assets[kind]:
@@ -80,7 +83,8 @@ def generation_jobs(sheet: SpottingSheet):
     for cue in sheet.cues:
         if fully_silent(cue.start_sec, cue.end_sec, sheet.silence_windows):
             continue
-        yield cue, "music", max(3, cue.end_sec - cue.start_sec), music_prompt(cue)
+        if not cue.reuse_music_from:
+            yield cue, "music", max(3, cue.end_sec - cue.start_sec), music_prompt(cue)
         if cue.bridge_sfx_prompt:
             yield cue, "sfx", min(2, cue.end_sec - cue.start_sec), cue.bridge_sfx_prompt
 

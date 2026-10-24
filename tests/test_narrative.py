@@ -199,7 +199,7 @@ class VisualMixIntegration(unittest.TestCase):
             tp = root / "story.json"
             tp.write_text(transcript.model_dump_json())
             config = RunConfig(video_path=path, transcript_path=tp, output_dir=root / "plan",
-                               mode="script_only", cue_seconds=120)
+                               mode="script_only", cue_seconds=120, vocal_policy="off")
             execute(config)
             sheet = SpottingSheet.model_validate_json((config.output_dir / "spotting_sheet.json").read_text())
             self.assertAlmostEqual(sheet.visual_events[0].start_sec, 6, delta=0.25)

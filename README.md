@@ -47,6 +47,15 @@ The setup script can install optional features:
 
     python scripts/bootstrap.py --extras asr,mir,browser,timeline,dev
 
+Narration/music rendering now defaults to the vocal-check gate. Install its extra:
+
+    python scripts/bootstrap.py --extras vocals
+
+This installs Demucs and a compatible PyTorch/torchaudio pair. It is a substantial optional
+download, not a lightweight frequency-band detector. Model weights load/download when the
+gate prepares, before any paid music generation. The text-only workflow does not need it.
+Use Python 3.10–3.12 for the pinned legacy Demucs extra; an isolated environment is recommended.
+
 ASR downloads model weights on first use. CPU/int8 is the default. GPU configuration is
 optional and depends on faster-whisper/CTranslate2 support for your computer.
 The default small model and automatic code-switching may need correction for Hinglish.
@@ -63,6 +72,8 @@ through their normal package process.
 This creates a 12-second video with synthetic speech-like tones and a synthetic music bed.
 It makes **no paid calls** and is a technical fixture, not an example of musical or voice quality.
 The final MP4 is in demo_media/output/local/.
+The procedural-tone demo explicitly sets vocal_policy=off. Its reports say
+disabled_unchecked; it does not claim a real vocal-detection test.
 
 ## Use your own script
 
@@ -112,6 +123,15 @@ The rules and LLM planners now share deterministic narrative guards:
 - Pre-silence cues use a late-transient exit with a bounded short decay/tail.
   The tail finishes before the protected line; it never spills into music silence.
 - Fully muted cues do not request music or SFX generation.
+
+The outro return reuses the first audible cue's approved music rather than generating a
+new closing song. It starts from that asset's selected loop/beat entry. Automatic beat
+estimates remain distinct from verified downbeats.
+Use --outro-return-sec 82 to anchor a reviewed return at 01:22, or
+--no-outro-music-return to keep a black-card closing sequence silent.
+CTA callbacks such as a repeated punchline do not create a second mute inside the same CTA.
+Before silence, the exit prefers a real transient around 0.5 seconds before the boundary;
+if there is no usable transient, it reports a microfade fallback instead of inventing a pluck.
 
 The 4 fps default gives quarter-second visual timing resolution. Tune
 --visual-sample-fps, --black-luma-threshold, --black-pixel-ratio and
@@ -187,6 +207,41 @@ Successful requests are cached in stems/generation_ledger.json. Pending/uncertai
 are not retried automatically. Check provider history and billing before authorizing a retry.
 The ledger prevents silent duplicate spend but cannot resolve a request whose server result
 was lost. A .run.lock prevents concurrent jobs from sharing an output directory.
+
+## Instrumental enforcement and the vocal-check gate
+
+The instrumental contract is enforced at the planner, asset store, and both provider
+adapters. Conflicting vocal-request clauses are removed; every music request receives
+the same strict no-vocals/no-singing/no-choir/no-vocal-chops suffix. ElevenLabs also keeps
+force_instrumental=true. A prompt or API flag alone is not audio-content validation.
+
+Generated, cached, and imported music all pass through the gate before stem mixing:
+
+- **--vocal-policy reject** (default): separate a vocal estimate, measure it, and block
+  a suspect asset. A missing/broken checker blocks the job before paid provider generation.
+- **--vocal-policy strip**: if suspect, use Demucs's no_vocals backing (drums+bass+other),
+  restore its source level and duration, and run a second separation/proxy check.
+  Residual failure blocks mixing. Only the music asset is separated; narration stays intact.
+- **--vocal-policy off**: explicitly bypass the gate. Outputs report disabled_unchecked.
+  This option is used by the synthetic offline fixture, not presented as a passing check.
+
+Example using an existing local asset manifest:
+
+    python -m src.cli --video raw.mp4 --transcript transcript.json --mode final_video --provider local --local-assets assets.json --vocal-policy strip --outro-return-sec 82 --output-dir agent_output/render3
+
+The default threshold is -35 dBFS **referenced to a -18 dBFS RMS mixture**, measured
+over active 400 ms windows. This level-normalized proxy catches short loud vocal
+estimates that a whole-track average might hide. It is not the arbitrary raw input
+fader level, a formant-band heuristic, or a validated singing classifier.
+Tune --vocal-threshold-dbfs only after listening/calibration. Demucs can leak instruments
+into its vocal estimate or miss quiet vocals; passing the threshold cannot prove vocal absence.
+
+Use --vocal-model and --vocal-device (cpu default, cuda/mps optional) for your setup.
+The selected model/device is checked before account credits can be consumed.
+Quality checks never automatically regenerate paid music. Rejected raw assets are retained:
+import those saved files into a new strip run to avoid generating/paying again.
+Review vocal_checks/vocal_qc.json for original/residual measurements and the selected file.
+Use prepared or approved files in your editor; retained raw generations can contain rejected vocals.
 
 ## Google Flow / MusicFX
 
@@ -271,6 +326,7 @@ source, lyrical leakage, musical coherence, artistic quality, or narrative appro
 | generation_plan.json | Review requests and duration before generation |
 | transcript.json | Timestamp provenance and dialogue |
 | visual_analysis.json | Luminance-based boundaries and analysis resolution |
+| vocal_checks/vocal_qc.json | Per-asset vocal proxy decisions and approved file paths |
 | dialogue.wav | Extracted original dialogue, when media was supplied |
 | provider/stems/*_music.wav | Decoded raw music per cue |
 | provider/stems/*_prepared.wav | Prepared cue with gain/silence processing |
@@ -294,8 +350,10 @@ Use --fps for the intended XML timebase; XML markers are frame-quantized.
     docker build -t duvera-music .
     docker run --rm -v "/absolute/project-work:/work" duvera-music --json-config /work/config.json
 
-The image includes FFmpeg and core dependencies, runs as a non-root user, and is suitable
-for imported audio/supplied transcripts. Browser and ASR extras are not installed in it.
+The core image includes FFmpeg and runs as a non-root user. Its default vocal gate requires
+the vocals extra; build with --build-arg INSTALL_VOCALS=1 for narration/music processing.
+Model weights still need to be cached or downloaded. The core image supports text-only
+planning and explicitly unchecked synthetic fixtures. Browser and ASR extras are not installed.
 
 ## Development and validation
 
@@ -306,6 +364,8 @@ for imported audio/supplied transcripts. Browser and ASR extras are not installe
 Tests run real FFmpeg video rendering, encoded output measurements, stem silence,
 local-assets comparison, schema errors, budget gates, pending-request protection and
 non-TTY behavior. They do not charge provider accounts or pretend to test live Google access.
+Vocal-gate tests use controlled separator outputs; they verify reject/strip/residual,
+missing-model and no-paid-call behavior, not Demucs's acoustic detection accuracy.
 GitHub Actions runs the same suite on Python 3.10 and 3.12 once this repository is pushed.
 
 See docs/VALIDATION.md for the actual build-session results and docs/RESEARCH_NOTES.md
