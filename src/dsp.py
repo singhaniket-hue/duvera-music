@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import math
 import wave
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
 from scipy.signal import butter, lfilter, sosfilt
 
 from .analyzer import onset_analysis
-from .media import PipelineError, SR, ffmpeg, loudness, normalize, read_audio, write_audio
+from .media import PipelineError, SR, ffmpeg, loudness, normalize, probe, read_audio, write_audio
 from .models import MusicCue, RunConfig, SpottingSheet
 from .narrative import fully_silent
 from .rhythm import fit_music, plan_loop
@@ -287,7 +288,7 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path,
     return bed_path, sfx_path, records
 
 
-def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig) -> dict:
+def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig, pacing=None, visual_source=None) -> dict:
     premix, master = root / "premix.wav", root / "master.wav"
     ffmpeg("-i", dialogue, "-i", music, "-i", sfx,
            "-filter_complex", "[0:a]highpass=f=65:p=2[v];[v][1:a][2:a]amix=inputs=3:duration=first:normalize=0[m]",
@@ -296,17 +297,32 @@ def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig
     master_qc = loudness(master)
     video = root / f"final_video_{root.name}.mp4"
     # Re-encode for predictable MP4 compatibility, preserving image dimensions and frame rate.
+    video_filter = "pad=ceil(iw/2)*2:ceil(ih/2)*2"
+    if visual_source and pacing and pacing.visuals:
+        from .visual_pacing import ffmpeg_filter
+        video_filter = ffmpeg_filter(pacing, visual_source)
     ffmpeg("-i", config.video_path, "-i", master, "-map", "0:v:0", "-map", "1:a:0",
            "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
-           "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:a", "aac", "-b:a", "192k",
+           "-vf", video_filter, "-c:a", "aac", "-b:a", "192k",
            "-ar", SR, "-movflags", "+faststart", "-shortest", video)
     # Measure the actual encoded output: AAC can change true peaks.
     final_qc = loudness(video)
     actual_i, actual_tp = final_qc.get("input_i"), final_qc.get("input_tp")
     passed = (actual_i is not None and actual_tp is not None and
               abs(actual_i - config.target_lufs) <= 1 and actual_tp <= -1)
+    visual_qc = None
+    if visual_source and pacing and pacing.visuals:
+        stream = next(s for s in probe(video)["streams"] if s["codec_type"] == "video")
+        actual_frames = int(stream.get("nb_frames", -1))
+        same_rate = Fraction(stream["avg_frame_rate"]) == Fraction(visual_source["rate"])
+        visual_qc = {"source_frames": visual_source["frames"], "output_frames": actual_frames,
+                     "frame_rate_preserved": same_rate,
+                     "passed": actual_frames == visual_source["frames"] and same_rate}
+        passed = passed and visual_qc["passed"]
     premix.unlink(missing_ok=True)
     return {"master": master.name, "video": video.name, "master_measurement": master_qc,
+            "visual_pacing": "rendered" if visual_source and pacing and pacing.visuals else "source_picture",
+            "visual_qc": visual_qc,
             "encoded_measurement": final_qc, "passed": passed,
             "target_lufs": config.target_lufs, "target_peak_db": config.true_peak_db,
             "qc_peak_ceiling_db": -1,

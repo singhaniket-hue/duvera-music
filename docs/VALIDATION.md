@@ -65,3 +65,26 @@ that the remote workflow has run.
   its reported singer or producing Render #3.
 - All 42 local unit/integration tests and Ruff checks passed. The real-render tests use
   procedural audio; the vocal-gate tests use explicitly controlled separation fixtures.
+
+## SFX/pacing extension — 25 October 2026
+
+- Added event contracts, an inspectable deterministic scheduler, three optional SFX layers,
+  sample-clock crest placement, bounded spectral sidechain control, true-peak checks,
+  separate editor buses, and a final-video punch-in renderer.
+- The earlier supplied review clip was analyzed locally. The frame-PTS detector located
+  the black-card entry at 68.000 seconds and candidate bright-mask changes at 69.167,
+  73.900 and 75.800 seconds. This is neither OCR nor proof of complete card detection.
+  No user media or generated inspection outputs were committed.
+- The 58-test suite includes real three-tier FFmpeg/AAC rendering, unchanged raw effect
+  assets, protected stem silence, negative pre-roll handling, crest timing, fixed-window
+  metering, cooldowns, location hold/crossfade policy, import/budget gates, stable mask
+  transitions, RANSAC local/global motion, crop geometry and actual encoded image changes.
+  VFR detection is tested; VFR visual rendering deliberately rejects before generation.
+- The standalone six-second procedural pacing demo completed with encoded -15.12 LUFS
+  and -3.24 dBTP. Its prepared tick/Foley landmarks had 0ms requested-target error.
+  These are technical fixtures, not evidence of artistic quality or narration quality.
+- Haar stability/geometry gates are covered, but real human eye/face accuracy is not
+  calibrated. Supplied reviewed eye anchors are more dependable than the heuristic.
+- No live SFX generation, Google SFX interface, VLM/OCR integration, NLE import, automatic
+  breath trimming or speech J/L editing was validated or claimed. The source-separation
+  caveats from the earlier update remain. No new breakfast-vlog render was produced.

@@ -13,12 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--extras", default="", help="Comma-separated: asr,mir,browser,timeline,vocals,dev")
+    parser.add_argument("--extras", default="", help="Comma-separated: asr,mir,browser,timeline,vocals,cv,dev")
     parser.add_argument("--install-ffmpeg", action="store_true")
     args = parser.parse_args()
     if sys.version_info < (3, 10):
         parser.error("Python 3.10 or newer is required")
-    allowed = {"asr", "mir", "browser", "timeline", "vocals", "dev"}
+    allowed = {"asr", "mir", "browser", "timeline", "vocals", "cv", "dev"}
     extras = [s.strip() for s in args.extras.split(",") if s.strip()]
     if set(extras) - allowed:
         parser.error("Unknown extra")

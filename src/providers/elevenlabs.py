@@ -16,7 +16,7 @@ class ElevenLabsProvider:
             raise PipelineError("Export ELEVENLABS_API_KEY; keys are never accepted in CLI arguments")
 
     @staticmethod
-    def payload(prompt: str, duration: float, kind: str) -> tuple[str, dict]:
+    def payload(prompt: str, duration: float, kind: str, loop: bool = False) -> tuple[str, dict]:
         if kind == "music":
             if not 3 <= duration <= 600:
                 raise PipelineError("ElevenLabs music length must be 3–600 seconds")
@@ -29,10 +29,11 @@ class ElevenLabsProvider:
         return "/sound-generation?output_format=mp3_44100_128", {
             "text": prompt, "duration_seconds": duration,
             "model_id": "eleven_text_to_sound_v2", "prompt_influence": 0.3,
+            "loop": loop,
         }
 
-    def generate(self, prompt: str, duration: float, kind: str, destination: Path):
-        endpoint, payload = self.payload(prompt, duration, kind)
+    def generate(self, prompt: str, duration: float, kind: str, destination: Path, loop: bool = False):
+        endpoint, payload = self.payload(prompt, duration, kind, loop)
         request = Request("https://api.elevenlabs.io/v1" + endpoint,
                           data=json.dumps(payload).encode(), headers={
                               "xi-api-key": self.key, "Content-Type": "application/json"})

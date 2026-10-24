@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Protocol
 
 from ..director import music_prompt
@@ -44,7 +45,7 @@ class AssetStore:
         temp.write_text(json.dumps(self.ledger, indent=2))
         temp.replace(self.ledger_path)
 
-    def get(self, cue_id: str, prompt: str, duration: float, kind: str) -> Path:
+    def get(self, cue_id: str, prompt: str, duration: float, kind: str, loop: bool = False) -> Path:
         if kind == "music":
             prompt = instrumental_prompt(prompt)
         key = f"{cue_id}_{kind}"
@@ -54,7 +55,7 @@ class AssetStore:
             return output
         if self.provider is None:
             raise PipelineError(f"Manifest is missing {kind} for {cue_id}")
-        fingerprint = hashlib.sha256(json.dumps([prompt, duration, kind]).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps([prompt, duration, kind, loop]).encode()).hexdigest()
         entry = self.ledger.get(key)
         if entry:
             if entry["fingerprint"] != fingerprint:
@@ -70,7 +71,10 @@ class AssetStore:
         self.ledger[key] = {"fingerprint": fingerprint, "status": "pending", "seconds": duration}
         self._save()
         raw = self.root / f"{key}.mp3"
-        self.provider.generate(prompt, duration, kind, raw)
+        if loop:
+            self.provider.generate(prompt, duration, kind, raw, loop=True)
+        else:
+            self.provider.generate(prompt, duration, kind, raw)
         extract_audio(raw, output)
         if float(probe(output)["format"]["duration"]) <= 0:
             raise PipelineError("Provider returned empty audio")
@@ -79,19 +83,22 @@ class AssetStore:
         return output
 
 
-def generation_jobs(sheet: SpottingSheet):
+def generation_jobs(sheet: SpottingSheet, pacing=None):
     for cue in sheet.cues:
         if fully_silent(cue.start_sec, cue.end_sec, sheet.silence_windows):
             continue
         if not cue.reuse_music_from:
             yield cue, "music", max(3, cue.end_sec - cue.start_sec), music_prompt(cue)
         if cue.bridge_sfx_prompt:
-            yield cue, "sfx", min(2, cue.end_sec - cue.start_sec), cue.bridge_sfx_prompt
+            yield cue, "sfx", max(0.5, min(2, cue.end_sec - cue.start_sec)), cue.bridge_sfx_prompt
+    if pacing:
+        for effect in pacing.effects:
+            yield SimpleNamespace(cue_id=effect.asset_id, loop=effect.tier == "ambience"), "sfx", effect.generation_sec, effect.prompt
 
 
-def validate_manifest_for_sheet(path: Path, sheet: SpottingSheet):
+def validate_manifest_for_sheet(path: Path, sheet: SpottingSheet, pacing=None):
     manifest = read_manifest(path)
-    for cue, kind, _, _ in generation_jobs(sheet):
+    for cue, kind, _, _ in generation_jobs(sheet, pacing):
         if cue.cue_id not in manifest[kind]:
             raise PipelineError(f"Manifest {path.name} missing {kind}/{cue.cue_id}")
         probe(manifest[kind][cue.cue_id])

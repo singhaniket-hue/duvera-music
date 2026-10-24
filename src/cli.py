@@ -13,7 +13,7 @@ from .models import RunConfig
 from .pipeline import execute
 from .preflight import check_environment
 
-PATHS = {"video_path", "script_path", "transcript_path", "spotting_sheet_path", "output_dir",
+PATHS = {"video_path", "script_path", "transcript_path", "spotting_sheet_path", "event_graph_path", "output_dir",
          "local_assets", "google_flow_assets", "elevenlabs_assets", "google_flow_browser_config", "chrome_profile_dir"}
 
 
@@ -25,6 +25,7 @@ def parser():
     p.add_argument("--plan-only", action="store_true", help="Analyze/plan without generating or rendering")
     for flag, dest in [("video", "video_path"), ("script", "script_path"), ("transcript", "transcript_path"),
                        ("spotting-sheet", "spotting_sheet_path"), ("output-dir", "output_dir"),
+                       ("event-graph", "event_graph_path"),
                        ("local-assets", "local_assets"), ("google-flow-assets", "google_flow_assets"),
                        ("elevenlabs-assets", "elevenlabs_assets"), ("google-flow-browser-config", "google_flow_browser_config"),
                        ("chrome-profile-dir", "chrome_profile_dir")]:
@@ -55,6 +56,13 @@ def parser():
     outro.add_argument("--outro-music-return", dest="outro_music_return", action="store_true", default=None)
     outro.add_argument("--no-outro-music-return", dest="outro_music_return", action="store_false", default=None)
     p.add_argument("--outro-return-sec", type=float)
+    p.add_argument("--sfx-mode", choices=["none", "accents_only", "full_3_tier"])
+    p.add_argument("--sfx-silence-policy", choices=["protect", "accents"])
+    p.add_argument("--visual-pacing", choices=["off", "plan", "render"])
+    p.add_argument("--no-pacing-detection", dest="pacing_detect_video", action="store_false", default=None)
+    p.add_argument("--accent-cooldown-sec", type=float)
+    p.add_argument("--major-cooldown-sec", type=float)
+    p.add_argument("--accent-salience-threshold", type=float)
     return p
 
 
@@ -72,6 +80,7 @@ def wizard() -> dict:
     mode = choice("Output:", ["script_only", "assets_and_script", "final_video"])
     language = choice("Spoken language:", ["english", "hinglish", "hindi"])
     data = {"mode": mode, "language": language}
+    data["sfx_mode"] = choice("Sound design:", ["none", "accents_only", "full_3_tier"])
     for key, label in [("video_path", "Video/audio path"), ("script_path", "Script path"),
                        ("transcript_path", "Timestamped transcript JSON path")]:
         value = input(label + " (Enter to skip): ").strip().strip('"')

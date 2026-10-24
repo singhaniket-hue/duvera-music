@@ -1,6 +1,6 @@
 # Duvera Music Director
 
-Dialogue-aware music direction and audio post-production for long-form YouTube videos.
+Dialogue-aware music direction, optional three-tier sound design, and visual pacing for YouTube videos.
 Built for English, Hindi and Hinglish, including Duvera-style reflective narration.
 
 Turn a script or recorded video into:
@@ -182,6 +182,48 @@ is available, a fixed sample-period fallback is explicitly reported in qc_report
 Use verified endpoints for rubato, irregular meters, harmonic mismatches or perceptible
 seams; quantization alone cannot guarantee an inaudible harmonic edit.
 
+## Optional SFX and visual pacing
+
+Install the local CV extra for frame-level detection:
+
+    python scripts/bootstrap.py --extras cv,vocals
+
+Choose --sfx-mode none (default), accents_only, or full_3_tier. The extension adds
+stable black-card/text-mask accents, coherent camera-motion candidates, evidence-driven
+ambience/Foley, per-tier stems, and sample-clock acoustic-crest placement. Ordinary cuts
+do not automatically receive a sound. The existing music workflow remains the default.
+
+    python -m src.cli --video raw.mp4 --transcript transcript.json --sfx-mode accents_only --mode script_only --output-dir agent_output/sfx_plan
+
+Inspect event_graph.json, pacing_plan.json and generation_plan.json. For full_3_tier,
+supply reviewed acoustic location/object events with --event-graph events.json.
+The CV detector uses stable bright masks, **not OCR**, and does not infer café/hotel/traffic
+semantics. Missing semantic events produce a warning rather than invented ambience.
+Use --no-pacing-detection to work exclusively from supplied events without OpenCV.
+
+Protected silence still removes every effects layer by default. The explicit
+--sfx-silence-policy accents option permits title sub-drops/text ticks during those
+windows while music, ambience and Foley remain silent. This changes the editorial intent:
+leave it at protect to retain the fully silent deadpan delivery from the earlier patch.
+
+--visual-pacing plan writes punch-in instructions; render applies them in final_video mode.
+Automatic punch-ins require a transcript emphasis/contrast AND stable local Haar eye-box
+geometry. Reviewed eye anchors can be supplied in events instead. Rendering currently
+requires constant frame rate; analysis can use VFR presentation timestamps. Pause/cut
+candidates are review notes; no breath deletion, dialogue J/L retiming, or shot removal occurs.
+
+Run a complete six-second offline three-tier/zoom fixture:
+
+    python scripts/create_pacing_demo.py --dir pacing_demo
+    python -m src.cli --json-config pacing_demo/config.json
+
+It uses synthetic tones/noise and explicitly supplied fixture events/anchor. It makes
+no API calls, bypasses the music vocal check explicitly, and demonstrates engineering
+behavior rather than sound-design taste or real face recognition. It also works without cv.
+
+See [docs/SFX_PACING.md](docs/SFX_PACING.md) for the event contract, asset imports,
+generation limits, measurement/QC definitions and current detector limitations.
+
 ## ElevenLabs
 
 Music uses POST /v1/music with music_v2 and force_instrumental=true.
@@ -308,7 +350,8 @@ The default rules planner does not claim semantic or emotional understanding.
 - Per-cue gap deviations are reported instead of hidden. The band proxy and gap
   are measured before final silence and master normalization.
 - 5 ms entry and 15 ms exit fades; transient-stop cues never extend into protected speech.
-- Protected silence removes music **and SFX** while leaving dialogue intact.
+- Protected silence removes music **and SFX** while leaving dialogue intact;
+  the optional explicit accents policy is documented above.
 - Two-pass FFmpeg loudnorm, followed by measurement of the actual encoded AAC video.
 - Default -15 LUFS / -1.5 dBTP target with a -1 dBTP delivery QC ceiling.
   Targets are presets, not YouTube rules. Deviations return status qc_failed and exit code 3.
@@ -326,6 +369,10 @@ source, lyrical leakage, musical coherence, artistic quality, or narrative appro
 | generation_plan.json | Review requests and duration before generation |
 | transcript.json | Timestamp provenance and dialogue |
 | visual_analysis.json | Luminance-based boundaries and analysis resolution |
+| event_graph.json, pacing_plan.json | Evidence, accepted/rejected SFX decisions, visual/pause review |
+| pacing_analysis.json | Optional frame-PTS CV evidence, without OCR/VLM claims |
+| provider/ambience.wav, foley.wav, accent.wav | Optional separate three-tier effects stems |
+| provider/sfx_qc.json | Actual placement samples, crest errors, pre-master levels and true peaks |
 | vocal_checks/vocal_qc.json | Per-asset vocal proxy decisions and approved file paths |
 | dialogue.wav | Extracted original dialogue, when media was supplied |
 | provider/stems/*_music.wav | Decoded raw music per cue |
@@ -357,7 +404,7 @@ planning and explicitly unchecked synthetic fixtures. Browser and ASR extras are
 
 ## Development and validation
 
-    python -m pip install -e ".[dev]"
+    python -m pip install -e ".[dev,cv]"
     ruff check .
     python -m unittest discover -s tests -v
 

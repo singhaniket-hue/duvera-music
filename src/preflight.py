@@ -15,6 +15,6 @@ def check_environment(profile: Path = Path("chrome_google_flow_profile")) -> dic
         "google_flow_authentication": "not_verified",
         "llm_configured": bool(os.getenv("DIRECTOR_LLM_URL") and os.getenv("DIRECTOR_LLM_MODEL")),
         "optional_dependencies": {x: importlib.util.find_spec(x) is not None for x in
-                                  ("faster_whisper", "librosa", "playwright", "opentimelineio", "demucs", "torch", "torchaudio")},
+                                  ("faster_whisper", "librosa", "playwright", "opentimelineio", "demucs", "torch", "torchaudio", "cv2")},
         "note": "CLI/plugin presence and profile files are not proof of provider authorization.",
     }

@@ -19,6 +19,9 @@ def export_script(sheet: SpottingSheet, transcript: Transcript, config: RunConfi
     lines = ["# Annotated music production script", "",
              f"Language: {config.language} · timing: **{sheet.timing_source}** · planner: {sheet.planner}",
              f"Master preset: {config.target_lufs} LUFS; {config.true_peak_db} dBTP. These are editable production targets.", ""]
+    if config.sfx_silence_policy == "accents":
+        lines += ["**Explicit exception:** editorial accents may play inside the MUSIC/SFX SILENCE windows below. "
+                  "Music, ambience and Foley remain protected. See pacing_plan.json.", ""]
     lines += [f"> {warning}" for warning in sheet.warnings]
     for cue in sheet.cues:
         lines += ["", f"## {cue.cue_id} — {timestamp(cue.start_sec)}–{timestamp(cue.end_sec)}",
@@ -49,7 +52,7 @@ def export_script(sheet: SpottingSheet, transcript: Transcript, config: RunConfi
                              cue.target_lu_gap, cue.narrative_purpose, music_prompt(cue)])
 
 
-def export_timeline(sheet: SpottingSheet, config: RunConfig, root: Path, records: list, dialogue: Path | None):
+def export_timeline(sheet: SpottingSheet, config: RunConfig, root: Path, records: list, dialogue: Path | None, pacing=None):
     fps, total = config.fps, round(sheet.video_duration_sec * config.fps)
     xml = ET.Element("xmeml", version="5")
     sequence = ET.SubElement(xml, "sequence", id="duvera-sequence")
@@ -90,8 +93,17 @@ def export_timeline(sheet: SpottingSheet, config: RunConfig, root: Path, records
         for cue in sheet.cues:
             clip(track, root / "stems" / f"{cue.cue_id}_prepared.wav", cue.cue_id,
                  cue.start_sec, cue.end_sec, channel)
-        clip(ET.SubElement(audio, "track"), root / "sfx.wav", "sfx", 0, sheet.video_duration_sec, channel)
+        effect_files = ["ambience", "foley", "accent", "bridge_sfx"] if (root / "ambience.wav").exists() else ["sfx"]
+        for name in effect_files:
+            clip(ET.SubElement(audio, "track"), root / f"{name}.wav", name, 0, sheet.video_duration_sec, channel)
     markers = []
+    if pacing:
+        for effect in pacing.effects:
+            markers.append({"time": effect.visual_time_sec, "name": effect.tier + ": " + effect.category,
+                            "comment": effect.event_id + "; sample placement is baked into SFX WAV, not XML frames"})
+        for visual in pacing.visuals:
+            markers.append({"time": visual.start_sec, "name": "Eye-anchored punch-in",
+                            "comment": f"{visual.zoom_to}x to {visual.end_sec}s; see pacing_plan.json. NLE crop not baked."})
     for event in sheet.visual_events:
         markers.append({"time": event.start_sec, "name": "Visual black boundary",
                         "comment": event.kind + "; luminance evidence, not OCR"})
@@ -119,7 +131,8 @@ def export_timeline(sheet: SpottingSheet, config: RunConfig, root: Path, records
     except ImportError:
         return
     timeline = otio.schema.Timeline(name="Duvera Music Director")
-    for name, path in [("Dialogue", dialogue), ("Music", root / "music.wav"), ("SFX", root / "sfx.wav")]:
+    effect_tracks = [(name, root / f"{name}.wav") for name in effect_files]
+    for name, path in [("Dialogue", dialogue), ("Music", root / "music.wav"), *effect_tracks]:
         if path is None:
             continue
         track = otio.schema.Track(name=name, kind=otio.schema.TrackKind.Audio)

@@ -40,11 +40,22 @@ Synthetic test fixtures explicitly use off and report disabled_unchecked.
 Contracts: src/models.py. CLI: src/cli.py. Pipeline: src/pipeline.py.
 Audio: src/dsp.py and src/media.py. Providers: src/providers/.
 All timeline data is in seconds; convert to frames only at XML export.
-Preserve dialogue and remove music/SFX during protected silence.
+Preserve dialogue and remove music/SFX during protected silence by default.
+The explicit sfx_silence_policy=accents exception permits only editorial accents, never
+ambience/Foley/music. Never turn it on implicitly to fill a punchline's silence.
 Never label inferred onsets as verified downbeats, estimated script timing as aligned timing,
 or source band energy as measured human intelligibility.
 
-Run python -m unittest discover -s tests -v and ruff check . for implementation changes.
+The optional SFX/pacing extension uses EventGraph evidence and PacingPlan decisions.
+Read docs/SFX_PACING.md. Review event_graph.json, pacing_plan.json and generation_plan.json.
+Use sfx_mode none/accents_only/full_3_tier. Location ambience and object Foley need explicit
+semantic evidence; bright masks are not OCR, and Haar eye-box midpoints are not pupil landmarks.
+Do not invent scene descriptions from the transcript or delete breaths from ASR gaps.
+Render impulse crests on the 48 kHz clock, not XML frames; inspect sfx_qc.json.
+Visual rendering supports CFR only and never retimes source speech. Cut/pause suggestions
+are review notes, not automatic edits. Use a fresh output directory after changing a plan.
+
+Install .[dev,cv], then run python -m unittest discover -s tests -v and ruff check . for implementation changes.
 Tests must not make billable external calls. Use the offline demo for full render validation.
 Report artistic/provider/NLE limitations honestly.
 

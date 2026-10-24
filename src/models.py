@@ -175,6 +175,14 @@ class RunConfig(Contract):
     vocal_device: Literal["cpu", "cuda", "mps"] = "cpu"
     outro_music_return: bool = True
     outro_return_sec: float | None = Field(default=None, ge=0)
+    sfx_mode: Literal["none", "accents_only", "full_3_tier"] = "none"
+    event_graph_path: Path | None = None
+    pacing_detect_video: bool = True
+    sfx_silence_policy: Literal["protect", "accents"] = "protect"
+    visual_pacing: Literal["off", "plan", "render"] = "off"
+    accent_cooldown_sec: float = Field(default=0.6, ge=0.25, le=3)
+    major_cooldown_sec: float = Field(default=1.8, ge=1, le=10)
+    accent_salience_threshold: float = Field(default=0.72, ge=0.5, le=1)
 
     @model_validator(mode="after")
     def coherent(self):
@@ -186,4 +194,6 @@ class RunConfig(Contract):
             raise ValueError("final_video requires video_path")
         if self.provider == "local" and self.mode != "script_only" and not self.local_assets:
             raise ValueError("local provider requires local_assets manifest")
+        if self.visual_pacing == "render" and (not self.video_path or self.mode != "final_video"):
+            raise ValueError("visual_pacing=render requires final_video and a video")
         return self
