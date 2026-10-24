@@ -93,6 +93,35 @@ Or install the ASR extra and let local faster-whisper transcribe:
 A reference script is an ASR hint; it is not evenly stretched across the video.
 The transcript JSON contract is shown in examples/transcript.json. ASR additionally writes
 word_timestamps.json. Review timestamps and spelling before generating a long score.
+Word timestamps are also embedded in transcript.json when ASR supplies them; the narrative
+planner uses them to anchor a pivot inside an ASR segment instead of always using its start.
+
+## Narrative direction and visual boundaries
+
+The rules and LLM planners now share deterministic narrative guards:
+
+- Contrast markers create a sectional change. Reflective Hinglish/Hindi/English phrases
+  change the music color; the reflective preset uses a **4.5 kHz LPF**.
+- Strong realizations, punchlines and idioms create protected music/SFX silence.
+  Merely saying "lekin" does not automatically mute a sentence.
+- Video analysis samples luminance and the proportion of dark/bright pixels. An abrupt
+  sustained drop to a mostly black frame with sparse highlights is treated as a
+  **black-card candidate**, not proof that text was read.
+- Black-card sequences remain protected until their end or a later transcript CTA.
+  A spoken CTA can bring music back even while the screen stays black.
+- Pre-silence cues use a late-transient exit with a bounded short decay/tail.
+  The tail finishes before the protected line; it never spills into music silence.
+- Fully muted cues do not request music or SFX generation.
+
+The 4 fps default gives quarter-second visual timing resolution. Tune
+--visual-sample-fps, --black-luma-threshold, --black-pixel-ratio and
+--black-min-duration-sec, or use --no-visual-analysis. Thresholds are engineering
+defaults, not validated universal text detectors. Startup black frames, short flashes,
+and gradual dim/night transitions are deliberately not treated as abrupt black-card events.
+
+Inspect visual_analysis.json and spotting_sheet.json before generation. With a supplied
+--spotting-sheet, your reviewed editorial decisions take priority over automatic guards.
+Use a fresh output directory after this update; old cached plans are not migrated.
 
 ## Editor pack using your existing music
 
@@ -110,6 +139,28 @@ source offsets in seconds. Supply SFX for cues that have bridge_sfx_prompt, or r
 prompt in an edited spotting sheet. --spotting-sheet accepts a reviewed sheet.
 Automatic onset entry detection is **not true bar/downbeat inference**. Optional librosa
 adds beat estimates, still not bar-phase verification. Short assets loop with crossfades.
+
+Loop stitching now selects a stable whole-beat region, in multiples of
+--beats-per-bar (default **assumed 4/4**). Crossfades retain the exact loop period:
+they no longer subtract 100 ms from each repeat. Adjacent cues using the same imported
+asset and loop region continue its phase through mood/LPF changes; after protected
+silence, the resumed cue starts afresh.
+
+A beat grid does not establish the true first beat of a bar. Automatic loops report
+bar-phase uncertainty. Supply verified source endpoints to remove the assumption:
+
+    {
+      "music": {"cue_001": "track.wav", "cue_002": "track.wav"},
+      "loops": {
+        "cue_001": {"start_sec": 0.5, "end_sec": 12.5},
+        "cue_002": {"start_sec": 0.5, "end_sec": 12.5}
+      }
+    }
+
+--loop-crossfade-ms controls the boundary blend (default 40 ms). When no stable grid
+is available, a fixed sample-period fallback is explicitly reported in qc_report.json.
+Use verified endpoints for rubato, irregular meters, harmonic mismatches or perceptible
+seams; quantization alone cannot guarantee an inaudible harmonic edit.
 
 ## ElevenLabs
 
@@ -219,6 +270,7 @@ source, lyrical leakage, musical coherence, artistic quality, or narrative appro
 | cue_sheet.csv | Cue list for editors |
 | generation_plan.json | Review requests and duration before generation |
 | transcript.json | Timestamp provenance and dialogue |
+| visual_analysis.json | Luminance-based boundaries and analysis resolution |
 | dialogue.wav | Extracted original dialogue, when media was supplied |
 | provider/stems/*_music.wav | Decoded raw music per cue |
 | provider/stems/*_prepared.wav | Prepared cue with gain/silence processing |

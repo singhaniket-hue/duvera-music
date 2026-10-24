@@ -10,6 +10,8 @@ Primary implementation references checked during the build:
 - https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert — separate SFX API.
 - https://ffmpeg.org/ffmpeg-filters.html — loudnorm, audio mixing and filtering.
 - https://www.itu.int/rec/R-REC-BS.1770 — framework for program loudness measurement.
+- https://librosa.org/doc/0.11.0/generated/librosa.beat.beat_track.html — beat tracking,
+  not meter/downbeat inference.
 
 Important corrections to the sample implementation in the brief:
 
@@ -30,7 +32,11 @@ Implemented choices:
 - Deterministic rules first, optional JSON-constrained LLM planning.
 - Local supplied-asset workflow is fully usable without any provider.
 - Manual verified downbeat offsets are supported. Optional librosa estimates beats.
-  Madmom/learned bar-phase models and visual scene detection were not bundled.
+  Madmom/learned bar-phase models and full visual scene classification are not bundled.
+- Update: streaming luminance boundary detection now supplies observed black-card candidates.
+  This uses no OCR; it does not understand text or classify narrative emotion from images.
+  Beat-quantized loops preserve their exact period and report bar-phase uncertainty.
+  Verified loop endpoints remain the reliable option for irregular/ambiguous music.
 - K-weighting is implemented at the fixed internal 48 kHz sample rate. 400 ms control
   windows are momentary energy estimates without integrated gating. Final integrated
   loudness and true peak come from FFmpeg loudnorm.

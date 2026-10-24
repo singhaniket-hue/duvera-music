@@ -23,15 +23,33 @@ class Segment(Contract):
         return self
 
 
+class Word(Contract):
+    start: float = Field(ge=0)
+    end: float = Field(gt=0)
+    word: str
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.end <= self.start:
+            raise ValueError("Word end must follow start")
+        return self
+
+
 class Transcript(Contract):
     segments: list[Segment] = Field(min_length=1)
     timing_source: Literal["asr", "supplied", "estimated"] = "supplied"
+    words: list[Word] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def ordered(self):
         for a, b in zip(self.segments, self.segments[1:]):
             if b.start < a.end - 0.001:
                 raise ValueError("Transcript segments must be sorted and non-overlapping")
+        for word in self.words:
+            if word.start < self.segments[0].start - 0.1 or word.end > self.segments[-1].end + 0.1:
+                raise ValueError("Word timestamps must lie within the transcript")
+        if any(b.start < a.start for a, b in zip(self.words, self.words[1:])):
+            raise ValueError("Word timestamps must be sorted")
         return self
 
 
@@ -61,6 +79,8 @@ class MusicCue(Contract):
     target_lu_gap: float = Field(ge=0, le=24)
     exit_type: Literal["transient_stop", "crossfade", "riser_bridge"] = "crossfade"
     bridge_sfx_prompt: str | None = None
+    lowpass_hz: int | None = Field(default=None, ge=1000, le=20000)
+    exit_tail_ms: float = Field(default=0, ge=0, le=500)
 
     @model_validator(mode="after")
     def ordered(self):
@@ -69,8 +89,23 @@ class MusicCue(Contract):
         return self
 
 
+class VisualEvent(Contract):
+    start_sec: float = Field(ge=0)
+    end_sec: float = Field(gt=0)
+    kind: Literal["black_card_candidate", "dark_boundary"]
+    mean_luma: float = Field(ge=0, le=255)
+    black_pixel_ratio: float = Field(ge=0, le=1)
+    bright_pixel_ratio: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.end_sec <= self.start_sec:
+            raise ValueError("Visual event end must follow start")
+        return self
+
+
 class SpottingSheet(Contract):
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
     video_duration_sec: float = Field(gt=0)
     dialogue_integrated_lufs: float | None = None
     timing_source: Literal["asr", "supplied", "estimated"]
@@ -78,6 +113,7 @@ class SpottingSheet(Contract):
     cues: list[MusicCue] = Field(min_length=1)
     silence_windows: list[SilenceWindow] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    visual_events: list[VisualEvent] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_timeline(self):
@@ -91,6 +127,9 @@ class SpottingSheet(Contract):
         for s in self.silence_windows:
             if s.end_sec > self.video_duration_sec + 0.001:
                 raise ValueError("Silence window exceeds media duration")
+        for event in self.visual_events:
+            if event.end_sec > self.video_duration_sec + 0.001:
+                raise ValueError("Visual event exceeds media duration")
         return self
 
 
@@ -119,6 +158,13 @@ class RunConfig(Contract):
     asr_model: str = "small"
     asr_device: str = "cpu"
     fps: int = Field(default=30, ge=1, le=120)
+    analyze_visuals: bool = True
+    black_luma_threshold: float = Field(default=10, ge=0, le=40)
+    black_pixel_ratio: float = Field(default=0.92, ge=0.8, le=1)
+    black_min_duration_sec: float = Field(default=0.6, ge=0.25, le=5)
+    visual_sample_fps: int = Field(default=4, ge=2, le=12)
+    beats_per_bar: int = Field(default=4, ge=1, le=12)
+    loop_crossfade_ms: float = Field(default=40, ge=3, le=200)
 
     @model_validator(mode="after")
     def coherent(self):

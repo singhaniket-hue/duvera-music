@@ -26,6 +26,7 @@ def export_script(sheet: SpottingSheet, transcript: Transcript, config: RunConfi
                   f"Cadence estimate: {cue.speech_syllables_per_sec:.2f} syllables/sec. "
                   f"Tempo suggestion: **{cue.target_bpm} BPM** (half/double-time alternatives may fit).",
                   f"Dialogue/music gap target: {cue.target_lu_gap} LU; depth: {cue.depth_profile}; exit: {cue.exit_type}.",
+                  f"Music LPF override: {cue.lowpass_hz or 'depth default'} Hz; bounded exit tail: {cue.exit_tail_ms} ms.",
                   "Mix: music HPF 45 Hz; depth LPF; center presence reduction up to 3.5 dB at 1.5–4 kHz "
                   "during speech; bounded 12 dB momentary-loudness ducking; 15 ms exit fade.",
                   "Entry: use a supplied downbeat offset when available; automatic onset entry is not a verified downbeat.",
@@ -89,13 +90,17 @@ def export_timeline(sheet: SpottingSheet, config: RunConfig, root: Path, records
                  cue.start_sec, cue.end_sec, channel)
         clip(ET.SubElement(audio, "track"), root / "sfx.wav", "sfx", 0, sheet.video_duration_sec, channel)
     markers = []
+    for event in sheet.visual_events:
+        markers.append({"time": event.start_sec, "name": "Visual black boundary",
+                        "comment": event.kind + "; luminance evidence, not OCR"})
     for silence in sheet.silence_windows:
         markers.append({"time": silence.start_sec, "name": "Music silence", "comment": silence.reason})
     for cue, record in zip(sheet.cues, records):
         markers.append({"time": cue.start_sec, "name": cue.cue_id, "comment": cue.narrative_purpose})
         last = -10
-        for onset in record["analysis"]["onsets"]:
-            time = cue.start_sec + onset - record["entry_offset_sec"]
+        onsets = record.get("timeline_onsets_sec", [cue.start_sec + x - record["entry_offset_sec"]
+                                                   for x in record["analysis"]["onsets"]])
+        for time in onsets:
             if cue.start_sec <= time < cue.end_sec and time - last >= 2:
                 markers.append({"time": time, "name": "Suggested visual accent", "comment": "Onset; not verified downbeat"})
                 last = time

@@ -11,6 +11,8 @@ from scipy.signal import butter, lfilter, sosfilt
 from .analyzer import onset_analysis
 from .media import SR, ffmpeg, loudness, normalize, read_audio, write_audio
 from .models import MusicCue, RunConfig, SpottingSheet
+from .narrative import fully_silent
+from .rhythm import fit_music, plan_loop
 
 
 def k_weighted(audio: np.ndarray) -> np.ndarray:
@@ -38,33 +40,40 @@ def interpolate(times: np.ndarray, values: np.ndarray, count: int, sr: int = SR)
     return np.interp(np.arange(count) / sr, times, values).astype(np.float32)
 
 
-def fit_music(audio: np.ndarray, seconds: float, onset: float = 0) -> np.ndarray:
-    """Loop short source with crossfades; exact timeline length; short sample-safe fades."""
-    target = round(seconds * SR)
-    start = min(max(0, round(onset * SR)), max(0, len(audio) - 1))
-    source = audio[start:]
-    if len(source) == 0:
-        raise ValueError("Empty music asset")
-    result = np.zeros((target, 2), dtype=np.float32)
-    length = min(target, len(source))
-    result[:length] = source[:length]
-    cursor = length
-    overlap = min(round(0.1 * SR), len(source) // 4)
-    while cursor < target:
-        cross = min(overlap, cursor)
-        take = min(len(source), target - cursor + cross)
-        if cross:
-            ramp = np.linspace(0, 1, cross, dtype=np.float32)[:, None]
-            result[cursor - cross:cursor] = result[cursor - cross:cursor] * (1 - ramp) + source[:cross] * ramp
-        result[cursor:cursor + take - cross] = source[cross:take]
-        cursor += take - cross
-    ramp_in = min(round(0.005 * SR), target // 4)
-    ramp_out = min(round(0.015 * SR), target // 4)
-    if ramp_in:
-        result[:ramp_in] *= np.linspace(0, 1, ramp_in)[:, None]
-    if ramp_out:
-        result[-ramp_out:] *= np.cos(np.linspace(0, math.pi / 2, ramp_out))[:, None] ** 2
-    return result
+def transient_exit(audio: np.ndarray, tail_ms: float) -> tuple[np.ndarray, dict]:
+    """Choose a strong late onset and fit decay/reverb BEFORE the protected boundary."""
+    count = len(audio)
+    tail = round(tail_ms / 1000 * SR)
+    decay = round(0.09 * SR)
+    hop = round(0.01 * SR)
+    first = max(0, count - round(0.8 * SR))
+    last = count - tail - decay
+    if last <= first or last - first < hop * 2:
+        return audio, {"method": "microfade_only", "tail_ms": 0}
+    energy = np.mean(audio[first:last] ** 2, axis=1)
+    blocks = len(energy) // hop
+    rms = np.sqrt(energy[:blocks * hop].reshape(blocks, hop).mean(axis=1))
+    flux = np.maximum(0, np.diff(rms, prepend=rms[0]))
+    if flux.max(initial=0) < 1e-6:
+        return audio, {"method": "microfade_only", "tail_ms": 0}
+    onset = first + int(np.argmax(flux)) * hop
+    dry_end = min(count, onset + decay)
+    result = audio.copy()
+    source = audio[max(onset, dry_end - round(0.05 * SR)):dry_end]
+    result[dry_end:] = 0
+    # Short tapped decay from the actual transient, bounded by the cue endpoint.
+    for delay_ms, level in ((35, 0.18), (70, 0.12), (115, 0.07), (150, 0.035)):
+        delay = round(delay_ms / 1000 * SR)
+        dest = dry_end + delay
+        take = min(len(source), count - dest, max(0, tail - delay))
+        if take > 0:
+            result[dest:dest + take] += source[:take] * level * np.linspace(1, 0, take)[:, None]
+    fade = min(round(0.015 * SR), count // 4)
+    if fade:
+        result[dry_end - fade:dry_end] *= np.linspace(1, 0, fade)[:, None]
+        result[-fade:] *= np.linspace(1, 0, fade)[:, None]
+    return result, {"method": "strong_late_onset_with_bounded_tail",
+                    "onset_sec": onset / SR, "dry_end_sec": dry_end / SR, "tail_ms": tail_ms}
 
 
 def silence_envelope(count: int, offset: float, sheet: SpottingSheet) -> np.ndarray:
@@ -83,11 +92,19 @@ def silence_envelope(count: int, offset: float, sheet: SpottingSheet) -> np.ndar
     return gain
 
 
-def duck(music: np.ndarray, dialogue: np.ndarray | None, cue: MusicCue) -> tuple[np.ndarray, dict]:
+def duck(music: np.ndarray, dialogue: np.ndarray | None, cue: MusicCue,
+         previous_cutoff: int | None = None) -> tuple[np.ndarray, dict]:
     cutoffs = {"barely_behind": 12000, "background": 9500,
                "cinematic_distant": 6500, "montage_foreground": 16000}
     filtered = sosfilt(butter(2, 45, "highpass", fs=SR, output="sos"), music, axis=0)
-    filtered = sosfilt(butter(2, cutoffs[cue.depth_profile], "lowpass", fs=SR, output="sos"), filtered, axis=0)
+    cutoff = cue.lowpass_hz or cutoffs[cue.depth_profile]
+    highpassed = filtered
+    filtered = sosfilt(butter(2, cutoff, "lowpass", fs=SR, output="sos"), highpassed, axis=0)
+    if previous_cutoff and previous_cutoff != cutoff:
+        length = min(len(music), round(0.2 * SR))
+        old = sosfilt(butter(2, previous_cutoff, "lowpass", fs=SR, output="sos"), highpassed[:length], axis=0)
+        blend = np.linspace(0, 1, length)[:, None]
+        filtered[:length] = old * (1 - blend) + filtered[:length] * blend
     times, music_l = momentary(filtered)
     valid_music = music_l > -70
     baseline = float(np.median(music_l[valid_music])) if valid_music.any() else -60
@@ -141,9 +158,11 @@ def _write_frames(writer, audio):
     writer.writeframes((np.clip(audio, -1, 1 - 1 / 32768) * 32768).astype("<i2").tobytes())
 
 
-def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path) -> tuple[Path, Path, list]:
+def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path,
+                config: RunConfig | None = None) -> tuple[Path, Path, list]:
     bed_path, sfx_path = root / "music.wav", root / "sfx.wav"
     records, cursor = [], 0
+    previous_source, phase_origin, previous_cutoff = None, 0, None
     with wave.open(str(bed_path), "wb") as bed, wave.open(str(sfx_path), "wb") as sfx:
         for w in (bed, sfx):
             w.setnchannels(2)
@@ -152,12 +171,25 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path) 
         for cue in sheet.cues:
             start, end = round(cue.start_sec * SR), round(cue.end_sec * SR)
             gap = start - cursor
+            if gap > 0:
+                previous_source, previous_cutoff = None, None
             while gap > 0:
                 block = min(gap, SR * 10)
                 for w in (bed, sfx):
                     _write_frames(w, np.zeros((block, 2), np.float32))
                 gap -= block
             source = root / "stems" / f"{cue.cue_id}_music.wav"
+            if fully_silent(cue.start_sec, cue.end_sec, sheet.silence_windows):
+                silence = np.zeros((end - start, 2), np.float32)
+                write_audio(root / "stems" / f"{cue.cue_id}_prepared.wav", silence)
+                _write_frames(bed, silence)
+                _write_frames(sfx, silence)
+                cursor, previous_source, previous_cutoff = end, None, None
+                records.append({"cue_id": cue.cue_id, "entry_offset_sec": 0,
+                                "analysis": {"onsets": [], "beats": [], "downbeat_verified": False, "method": "protected_silence"},
+                                "control": {"gap_control": "protected_silence"},
+                                "speech_band_music_to_voice_db": None})
+                continue
             analysis = onset_analysis(source)
             raw, _ = read_audio(source)
             manual_downbeat = store.assets["downbeats"].get(cue.cue_id)
@@ -171,17 +203,31 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path) 
                 first = analysis["onsets"][0] if analysis["onsets"] else 0
                 entry = first if first < 3 else 0
             seconds = (end - start) / SR
-            music = fit_music(raw, seconds, entry)
+            loop = plan_loop(raw, analysis, entry, store.assets.get("loops", {}).get(cue.cue_id),
+                             config.beats_per_bar if config else 4)
+            source_identity = (store.assets["music"].get(cue.cue_id, source),
+                               loop["start_sec"], loop["end_sec"])
+            if source_identity != previous_source:
+                phase_origin = cue.start_sec
+            phase = cue.start_sec - phase_origin
+            music = fit_music(raw, seconds, entry, region=loop, phase_sec=phase,
+                              crossfade_ms=config.loop_crossfade_ms if config else 40)
+            timeline_onsets = []
+            period = loop["period_sec"]
+            for onset in analysis["onsets"]:
+                if loop["start_sec"] <= onset < loop["end_sec"]:
+                    time = (onset - loop["start_sec"] - phase) % period
+                    while time < seconds:
+                        timeline_onsets.append(cue.start_sec + time)
+                        time += period
+            exit_record = None
             if cue.exit_type == "transient_stop":
-                onsets = [x - entry for x in analysis["onsets"] if seconds - 0.65 <= x - entry <= seconds - 0.09]
-                if onsets:
-                    stop = min(len(music), round((onsets[-1] + 0.09) * SR))
-                    fade = min(round(0.015 * SR), stop)
-                    if fade:
-                        music[stop - fade:stop] *= np.linspace(1, 0, fade)[:, None]
-                    music[stop:] = 0
+                music, exit_record = transient_exit(music, cue.exit_tail_ms)
             voice = read_dialogue_window(dialogue, cue.start_sec, end - start) if dialogue else None
-            processed, metrics = duck(music, voice, cue)
+            processed, metrics = duck(music, voice, cue, previous_cutoff)
+            previous_source = source_identity
+            previous_cutoff = cue.lowpass_hz or {"barely_behind": 12000, "background": 9500,
+                                                "cinematic_distant": 6500, "montage_foreground": 16000}[cue.depth_profile]
             silence = silence_envelope(len(processed), cue.start_sec, sheet)
             processed *= silence[:, None]
             # All exits fade, including filter ringing introduced after the initial clip fade.
@@ -212,7 +258,10 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path) 
                 if v > 1e-12 and m > 1e-12:
                     overlap_db = round(float(10 * np.log10(m / v)), 2)
             records.append({"cue_id": cue.cue_id, "entry_offset_sec": entry, "analysis": analysis,
-                            "control": metrics, "speech_band_music_to_voice_db": overlap_db})
+                            "loop": loop, "loop_phase_sec": phase, "exit": exit_record,
+                            "timeline_onsets_sec": sorted(timeline_onsets),
+                            "lowpass_hz": previous_cutoff, "control": metrics,
+                            "speech_band_music_to_voice_db": overlap_db})
         tail = round(sheet.video_duration_sec * SR) - cursor
         while tail > 0:
             count = min(tail, SR * 10)

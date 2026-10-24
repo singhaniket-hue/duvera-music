@@ -9,6 +9,7 @@ from typing import Protocol
 from ..director import music_prompt
 from ..media import PipelineError, extract_audio, probe
 from ..models import RunConfig, SpottingSheet
+from ..narrative import fully_silent
 
 
 class AudioProvider(Protocol):
@@ -17,7 +18,7 @@ class AudioProvider(Protocol):
 
 def read_manifest(path: Path) -> dict:
     raw = json.loads(path.read_text(encoding="utf-8"))
-    result = {"music": {}, "sfx": {}, "downbeats": raw.get("downbeats", {})}
+    result = {"music": {}, "sfx": {}, "downbeats": raw.get("downbeats", {}), "loops": raw.get("loops", {})}
     for kind in ("music", "sfx"):
         for key, value in raw.get(kind, {}).items():
             p = Path(value).expanduser()
@@ -33,7 +34,7 @@ class AssetStore:
     def __init__(self, root: Path, config: RunConfig, manifest: Path | None, provider: AudioProvider | None):
         self.root, self.config, self.provider = root, config, provider
         root.mkdir(parents=True, exist_ok=True)
-        self.assets = read_manifest(manifest) if manifest else {"music": {}, "sfx": {}, "downbeats": {}}
+        self.assets = read_manifest(manifest) if manifest else {"music": {}, "sfx": {}, "downbeats": {}, "loops": {}}
         self.ledger_path = root / "generation_ledger.json"
         self.ledger = json.loads(self.ledger_path.read_text()) if self.ledger_path.exists() else {}
 
@@ -77,6 +78,8 @@ class AssetStore:
 
 def generation_jobs(sheet: SpottingSheet):
     for cue in sheet.cues:
+        if fully_silent(cue.start_sec, cue.end_sec, sheet.silence_windows):
+            continue
         yield cue, "music", max(3, cue.end_sec - cue.start_sec), music_prompt(cue)
         if cue.bridge_sfx_prompt:
             yield cue, "sfx", min(2, cue.end_sec - cue.start_sec), cue.bridge_sfx_prompt

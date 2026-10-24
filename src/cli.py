@@ -40,6 +40,13 @@ def parser():
     p.add_argument("--fps", type=int)
     p.add_argument("--asr-model")
     p.add_argument("--asr-device")
+    p.add_argument("--no-visual-analysis", dest="analyze_visuals", action="store_false", default=None)
+    p.add_argument("--visual-sample-fps", type=int)
+    p.add_argument("--black-luma-threshold", type=float)
+    p.add_argument("--black-pixel-ratio", type=float)
+    p.add_argument("--black-min-duration-sec", type=float)
+    p.add_argument("--beats-per-bar", type=int)
+    p.add_argument("--loop-crossfade-ms", type=float)
     return p
 
 

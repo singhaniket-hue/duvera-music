@@ -18,6 +18,7 @@ from .models import RunConfig, SpottingSheet
 from .providers import AssetStore, generation_jobs, validate_manifest_for_sheet
 from .providers.elevenlabs import ElevenLabsProvider
 from .providers.google_flow import GoogleFlowProvider, load_browser_config
+from .visuals import analyze_video
 
 
 def save_json(path: Path, value):
@@ -36,7 +37,7 @@ def _fingerprint(config: RunConfig) -> str:
                     raise PipelineError(f"Input file not found: {value}")
                 stat = value.stat()
                 files[name] = [str(value.resolve()), stat.st_size, stat.st_mtime_ns]
-    return hashlib.sha256(json.dumps([data, files], sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(["narrative-loop-v2", data, files], sort_keys=True).encode()).hexdigest()
 
 
 def _branches(config: RunConfig):
@@ -103,6 +104,13 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
     if config.video_path or config.mode != "script_only":
         require_ffmpeg()
     transcript, duration, dialogue = ingest(config)
+    visuals = analyze_video(config.video_path, duration, config) if config.video_path else []
+    save_json(root / "visual_analysis.json", {
+        "events": [v.model_dump() for v in visuals],
+        "enabled": config.analyze_visuals,
+        "resolution_sec": 1 / config.visual_sample_fps,
+        "note": "Luminance and sparse highlights suggest cards; no OCR or semantic text detection.",
+    })
     pulse, dialogue_lufs = None, None
     if dialogue:
         dialogue_lufs = loudness(dialogue)["input_i"]
@@ -119,7 +127,7 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
     elif (root / "spotting_sheet.json").exists():
         sheet = SpottingSheet.model_validate_json((root / "spotting_sheet.json").read_text(encoding="utf-8"))
     else:
-        sheet = plan(transcript, duration, config, dialogue_lufs, pulse)
+        sheet = plan(transcript, duration, config, dialogue_lufs, pulse, visuals)
     if abs(sheet.video_duration_sec - duration) > 0.001 or sheet.timing_source != transcript.timing_source:
         raise PipelineError("Cached spotting sheet no longer matches media timing; use a new output directory")
     (root / "spotting_sheet.json").write_text(sheet.model_dump_json(indent=2), encoding="utf-8")
@@ -150,7 +158,7 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
             store = AssetStore(branch / "stems", config, manifest, providers.get(name))
             for cue, kind, seconds, prompt in generation_jobs(sheet):
                 store.get(cue.cue_id, prompt, seconds, kind)
-            music, sfx, records = build_stems(sheet, store, dialogue, branch)
+            music, sfx, records = build_stems(sheet, store, dialogue, branch, config)
             export_script(sheet, transcript, config, branch)
             export_timeline(sheet, config, branch, records, dialogue)
             qc = {"provider": name, "source": planned[name], "cues": records, "mastering": None}

@@ -36,9 +36,10 @@ def transcribe(path: Path, config: RunConfig, hint: str) -> Transcript:
     for s in chunks:
         if s.text.strip() and s.end > s.start:
             segments.append(Segment(start=max(0, s.start), end=s.end, text=s.text.strip()))
-            words.extend({"start": w.start, "end": w.end, "word": w.word} for w in (s.words or []))
+            words.extend({"start": max(0, w.start), "end": w.end, "word": w.word}
+                         for w in (s.words or []) if w.end > max(0, w.start))
     (config.output_dir / "word_timestamps.json").write_text(json.dumps(words, ensure_ascii=False, indent=2))
-    return Transcript(segments=segments, timing_source="asr")
+    return Transcript(segments=segments, timing_source="asr", words=words)
 
 
 def ingest(config: RunConfig) -> tuple[Transcript, float, Path | None]:
@@ -109,5 +110,12 @@ def onset_analysis(path: Path, use_librosa: bool = True) -> dict:
     rms = np.sqrt(np.mean(mono[:n * hop].reshape(n, hop) ** 2, axis=1))
     flux = np.maximum(0, np.diff(rms, prepend=rms[0]))
     peaks, _ = find_peaks(flux, distance=15, prominence=max(float(flux.max()) * 0.12, 1e-5))
-    return {"onsets": (peaks * hop / sr).tolist(), "beats": [], "estimated_bpm": None,
+    times = peaks * hop / sr
+    # Core-only fallback accepts a regular transient train; irregular onsets remain unquantized.
+    intervals = np.diff(times)
+    regular = len(times) >= 6 and 0.28 <= np.median(intervals) <= 1.5
+    if regular:
+        regular = np.max(abs(intervals - np.median(intervals))) < 0.12 * np.median(intervals)
+    return {"onsets": times.tolist(), "beats": times.tolist() if regular else [],
+            "estimated_bpm": float(60 / np.median(intervals)) if regular else None,
             "method": "rms_flux", "downbeat_verified": False}
