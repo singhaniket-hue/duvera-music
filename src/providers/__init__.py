@@ -83,7 +83,12 @@ class AssetStore:
         return output
 
 
-def generation_jobs(sheet: SpottingSheet, pacing=None):
+def generation_jobs(sheet: SpottingSheet, pacing=None, locked_music=False):
+    if locked_music:
+        if pacing:
+            for effect in pacing.effects:
+                yield SimpleNamespace(cue_id=effect.asset_id, loop=effect.tier == "ambience"), "sfx", effect.generation_sec, effect.prompt
+        return
     for cue in sheet.cues:
         if fully_silent(cue.start_sec, cue.end_sec, sheet.silence_windows):
             continue
@@ -96,9 +101,9 @@ def generation_jobs(sheet: SpottingSheet, pacing=None):
             yield SimpleNamespace(cue_id=effect.asset_id, loop=effect.tier == "ambience"), "sfx", effect.generation_sec, effect.prompt
 
 
-def validate_manifest_for_sheet(path: Path, sheet: SpottingSheet, pacing=None):
+def validate_manifest_for_sheet(path: Path, sheet: SpottingSheet, pacing=None, locked_music=False):
     manifest = read_manifest(path)
-    for cue, kind, _, _ in generation_jobs(sheet, pacing):
+    for cue, kind, _, _ in generation_jobs(sheet, pacing, locked_music):
         if cue.cue_id not in manifest[kind]:
             raise PipelineError(f"Manifest {path.name} missing {kind}/{cue.cue_id}")
         probe(manifest[kind][cue.cue_id])

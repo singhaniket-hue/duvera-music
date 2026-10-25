@@ -88,3 +88,21 @@ that the remote workflow has run.
 - No live SFX generation, Google SFX interface, VLM/OCR integration, NLE import, automatic
   breath trimming or speech J/L editing was validated or claimed. The source-separation
   caveats from the earlier update remain. No new breakfast-vlog render was produced.
+
+## Render #4 audibility/continuity regression — 25 October 2026
+
+- The supplied mixed 43f2955 MP4 was inspected locally. Updated mask analysis detects
+  black entry at 68s and text changes at 69.167, 71, 73.9, 75.8, 79.067, 81.667 and 84.2s.
+  Six requested accents use refined frame times; no OCR or source-stem inference is claimed.
+- Code inspection confirms NumPy summation and normalize=0 were already present. Actual
+  Render #4 config/stems/ledger were not supplied, so its cause is not conclusively known.
+- Added explicit audible peak/active-RMS profile, required-event/empty-plan blocks, louder
+  sub bus headroom, post-control level checks, nonzero combined-bus QC, and an actual
+  FFmpeg premix-minus-reference routing test before mastering.
+- Added SHA-verified music-only timeline locks with no music regeneration, preserved vocal
+  checking, automatic silent-intro avoidance and unexpected music-gap QC before mux.
+- All 65 tests passed locally, including an 86-second synthetic bus with one sub/six ticks,
+  real intentionally divided/undivided FFmpeg mixers, locked-bed byte equality, tamper
+  rejection, compact vertical text, and a controlled SFX transient surviving encoded AAC.
+- No live provider/model test or actual Render #5 is claimed. The mixed attachment cannot
+  recover the isolated Render #3 bed or raw narration; those are needed for that render.

@@ -52,6 +52,12 @@ Use sfx_mode none/accents_only/full_3_tier. Location ambience and object Foley n
 semantic evidence; bright masks are not OCR, and Haar eye-box midpoints are not pupil landmarks.
 Do not invent scene descriptions from the transcript or delete breaths from ASR gaps.
 Render impulse crests on the 48 kHz clock, not XML frames; inspect sfx_qc.json.
+For the Render #4 regression, read docs/RENDER5.md. Use the explicit audible profile and
+accents silence exception when requested; required effects must never silently disappear.
+Keep sample-peak dBFS, active RMS dBFS, windowed LUFS and true-peak dBTP distinct.
+Locked music means an existing timeline music-only PCM16 WAV plus its SHA-256, not a git
+commit seed or a mixed MP4/master. Recheck the vocal gate; never auto-strip a locked bed.
+Check music_continuity and sfx_routing in qc_report.json before calling a render complete.
 Visual rendering supports CFR only and never retimes source speech. Cut/pause suggestions
 are review notes, not automatic edits. Use a fresh output directory after changing a plan.
 

@@ -14,6 +14,7 @@ from .media import PipelineError, SR, ffmpeg, loudness, normalize, probe, read_a
 from .models import MusicCue, RunConfig, SpottingSheet
 from .narrative import fully_silent
 from .rhythm import fit_music, plan_loop
+from .music_continuity import audible_entry
 
 
 def k_weighted(audio: np.ndarray) -> np.ndarray:
@@ -218,6 +219,8 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path,
                 # Skip only a weak, short intro; onsets are NOT bar downbeats.
                 first = analysis["onsets"][0] if analysis["onsets"] else 0
                 entry = first if first < 3 else 0
+                entry = max(entry, audible_entry(raw))
+                analysis["automatic_audible_entry_sec"] = entry
             seconds = (end - start) / SR
             loop = plan_loop(raw, analysis, entry, store.assets.get("loops", {}).get(source_id),
                              config.beats_per_bar if config else 4)
@@ -290,9 +293,18 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path,
 
 def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig, pacing=None, visual_source=None) -> dict:
     premix, master = root / "premix.wav", root / "master.wav"
+    reference = root / "premix_without_sfx.wav"
     ffmpeg("-i", dialogue, "-i", music, "-i", sfx,
-           "-filter_complex", "[0:a]highpass=f=65:p=2[v];[v][1:a][2:a]amix=inputs=3:duration=first:normalize=0[m]",
-           "-map", "[m]", "-ar", SR, "-c:a", "pcm_f32le", premix)
+           "-filter_complex", "[0:a]highpass=f=65:p=2,asplit=2[v][vr];[1:a]asplit=2[b][br];"
+           "[v][b][2:a]amix=inputs=3:duration=first:normalize=0[m];"
+           "[vr][br]amix=inputs=2:duration=first:normalize=0[ref]",
+           "-map", "[m]", "-ar", SR, "-c:a", "pcm_f32le", premix,
+           "-map", "[ref]", "-ar", SR, "-c:a", "pcm_f32le", reference)
+    from .mix_qc import verify_sfx_routing
+    routing = verify_sfx_routing(premix, reference, sfx)
+    reference.unlink(missing_ok=True)
+    if not routing["passed"]:
+        raise PipelineError("SFX premix routing failed: waveform was omitted or attenuated")
     normalize(premix, master, config.target_lufs, config.true_peak_db)
     master_qc = loudness(master)
     video = root / f"final_video_{root.name}.mp4"
@@ -321,6 +333,7 @@ def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig
         passed = passed and visual_qc["passed"]
     premix.unlink(missing_ok=True)
     return {"master": master.name, "video": video.name, "master_measurement": master_qc,
+            "sfx_routing": routing,
             "visual_pacing": "rendered" if visual_source and pacing and pacing.visuals else "source_picture",
             "visual_qc": visual_qc,
             "encoded_measurement": final_qc, "passed": passed,

@@ -66,14 +66,36 @@ def peak_db(audio: np.ndarray) -> float:
     return float(20 * np.log10(max(float(peak), 1e-12)))
 
 
-def level_effect(audio: np.ndarray, target_lufs: float, ceiling: float, ambience=False) -> tuple[np.ndarray, dict]:
+def sample_peak_db(audio: np.ndarray) -> float:
+    return float(20 * np.log10(max(float(np.max(np.abs(audio), initial=0)), 1e-12)))
+
+
+def active_rms_db(audio: np.ndarray) -> float:
+    """Linked stereo RMS in active 20ms blocks, excluding tails >30dB below the strongest block."""
+    width = round(0.02 * SR)
+    padded = np.pad(audio, ((0, (-len(audio)) % width), (0, 0)))
+    power = np.mean(padded.astype(np.float64).reshape(-1, width, 2) ** 2, axis=(1, 2))
+    active = power > max(1e-8, float(power.max(initial=0)) * 1e-3)
+    return float(10 * np.log10(max(float(power[active].mean()) if active.any() else 0, 1e-12)))
+
+
+def level_effect(audio: np.ndarray, target_lufs: float, ceiling: float, ambience=False, *,
+                 level_mode="loudness", target_peak_dbfs=None, target_rms_dbfs=None) -> tuple[np.ndarray, dict]:
     window = 3.0 if ambience else 0.4
     measured = window_loudness(audio, window)
-    gain = min(target_lufs - measured, ceiling - 0.2 - peak_db(audio), 36)
+    requested_gain = target_lufs - measured
+    if level_mode == "sample_peak":
+        requested_gain = target_peak_dbfs - sample_peak_db(audio)
+    elif level_mode == "active_rms":
+        requested_gain = target_rms_dbfs - active_rms_db(audio)
+    gain = min(requested_gain, ceiling - 0.2 - peak_db(audio), 36)
     result = (audio * 10 ** (gain / 20)).astype(np.float32)
     return result, {"meter": "max_short_term_3s" if ambience else "max_momentary_400ms",
                     "window_sec": window, "short_assets_zero_padded": True,
                     "target_lufs": target_lufs, "measured_lufs": window_loudness(result, window),
+                    "level_mode": level_mode, "target_peak_dbfs": target_peak_dbfs,
+                    "target_active_rms_dbfs": target_rms_dbfs,
+                    "sample_peak_dbfs": sample_peak_db(result), "active_rms_dbfs": active_rms_db(result),
                     "reconstructed_peak_estimate_db": peak_db(result), "gain_db": gain}
 
 

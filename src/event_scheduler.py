@@ -33,11 +33,12 @@ def schedule(graph: EventGraph, sheet: SpottingSheet, transcript: Transcript, co
         if event.time_sec >= duration or (event.end_sec is not None and event.end_sec > duration + 0.001):
             raise ValueError(f"Event {event.event_id} exceeds source duration")
         dialogue_active = any(s.start <= event.time_sec < s.end for s in transcript.segments)
-        structural = event.kind in {"black_card", "text_enter", "whip", "zoom", "ui_tick"}
+        structural = event.kind in {"black_card", "text_enter", "whip", "zoom", "ui_tick", "shutter"}
         score = (0.30 * event.semantic_salience + 0.25 * event.intensity + 0.20 * event.confidence
                  + 0.15 * structural + 0.10 * (not dialogue_active))
         decision = {"event_id": event.event_id, "time_sec": event.time_sec,
-                    "score": round(score, 4), "dialogue_active": dialogue_active, "accepted": False}
+                    "score": round(score, 4), "dialogue_active": dialogue_active, "accepted": False,
+                    "required": event.required}
         result.decisions.append(decision)
         if event.kind == "punch_in":
             if config.visual_pacing == "off":
@@ -130,4 +131,19 @@ def schedule(graph: EventGraph, sheet: SpottingSheet, transcript: Transcript, co
                 "reason": "ASR/segment gap is not proof of disposable silence; breath and visual review required"})
     if config.sfx_mode == "full_3_tier" and not any(x.tier == "ambience" for x in result.effects):
         result.warnings.append("No evidenced location events: ambience was not invented. Supply an event graph.")
+    lookup = {e.event_id: e for e in graph.events}
+    for effect in result.effects:
+        effect.required = lookup[effect.event_id].required
+        if config.sfx_mix_profile == "audible":
+            if effect.tier == "ambience":
+                effect.level_mode, effect.target_rms_dbfs = "active_rms", -28
+            else:
+                effect.level_mode = "sample_peak"
+                effect.target_peak_dbfs = -3.5 if effect.category == "sub_drop" else -8
+                effect.peak_ceiling_db = -3 if effect.category == "sub_drop" else effect.peak_ceiling_db
+    for decision in result.decisions:
+        if decision["required"] and not decision["accepted"]:
+            result.blocking_issues.append(f"Required event {decision['event_id']}: {decision['reason']}")
+    if config.sfx_mode != "none" and not result.effects:
+        result.blocking_issues.append("SFX enabled but no effects accepted; review mode, silence policy and event evidence")
     return result

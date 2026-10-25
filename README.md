@@ -224,6 +224,16 @@ behavior rather than sound-design taste or real face recognition. It also works 
 See [docs/SFX_PACING.md](docs/SFX_PACING.md) for the event contract, asset imports,
 generation limits, measurement/QC definitions and current detector limitations.
 
+For the breakfast-vlog Render #4 audit, see [docs/RENDER5.md](docs/RENDER5.md).
+The new recipe pins an existing music-only bed by SHA-256, enables the requested audible
+effects, and requires its sub-drop/six ticks rather than silently skipping them.
+Enabled SFX with zero accepted events now blocks before generation. Every final render
+also verifies that the actual premix contains the SFX waveform at unity gain.
+
+--sfx-mix-profile audible uses sample-peak targets for accents and active-block RMS for
+ambience, retaining independent true-peak ceilings. It is an explicit alternative to the
+original research loudness profile, not a new definition of LUFS or true peak.
+
 ## ElevenLabs
 
 Music uses POST /v1/music with music_v2 and force_instrumental=true.

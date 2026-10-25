@@ -13,7 +13,7 @@ from .models import RunConfig
 from .pipeline import execute
 from .preflight import check_environment
 
-PATHS = {"video_path", "script_path", "transcript_path", "spotting_sheet_path", "event_graph_path", "output_dir",
+PATHS = {"video_path", "script_path", "transcript_path", "spotting_sheet_path", "event_graph_path", "locked_music_path", "output_dir",
          "local_assets", "google_flow_assets", "elevenlabs_assets", "google_flow_browser_config", "chrome_profile_dir"}
 
 
@@ -26,6 +26,7 @@ def parser():
     for flag, dest in [("video", "video_path"), ("script", "script_path"), ("transcript", "transcript_path"),
                        ("spotting-sheet", "spotting_sheet_path"), ("output-dir", "output_dir"),
                        ("event-graph", "event_graph_path"),
+                       ("locked-music", "locked_music_path"),
                        ("local-assets", "local_assets"), ("google-flow-assets", "google_flow_assets"),
                        ("elevenlabs-assets", "elevenlabs_assets"), ("google-flow-browser-config", "google_flow_browser_config"),
                        ("chrome-profile-dir", "chrome_profile_dir")]:
@@ -57,6 +58,9 @@ def parser():
     outro.add_argument("--no-outro-music-return", dest="outro_music_return", action="store_false", default=None)
     p.add_argument("--outro-return-sec", type=float)
     p.add_argument("--sfx-mode", choices=["none", "accents_only", "full_3_tier"])
+    p.add_argument("--sfx-mix-profile", choices=["research", "audible"])
+    p.add_argument("--locked-music-sha256")
+    p.add_argument("--max-music-gap-sec", type=float)
     p.add_argument("--sfx-silence-policy", choices=["protect", "accents"])
     p.add_argument("--visual-pacing", choices=["off", "plan", "render"])
     p.add_argument("--no-pacing-detection", dest="pacing_detect_video", action="store_false", default=None)

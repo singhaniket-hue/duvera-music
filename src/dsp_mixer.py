@@ -15,7 +15,8 @@ from .media import PipelineError, SR, loudness, read_audio, write_audio
 from .models import RunConfig, SpottingSheet
 from .pacing_models import PacingPlan
 from .rhythm import fit_music
-from .sfx_engine import crest_sample, level_effect, placement, window_loudness
+from .sfx_engine import active_rms_db, crest_sample, level_effect, placement, sample_peak_db, window_loudness
+from .event_scheduler import protected
 from .sfx_engine import shape as shape_effect
 
 
@@ -77,7 +78,8 @@ def render_effects(plan: PacingPlan, sheet: SpottingSheet, store, dialogue: Path
                 if fade:
                     audio[:fade] *= np.sin(np.linspace(0, np.pi / 2, fade))[:, None]
                     audio[-fade:] *= np.cos(np.linspace(0, np.pi / 2, fade))[:, None]
-            audio, level = level_effect(audio, item.target_lufs, item.peak_ceiling_db, ambience)
+            audio, level = level_effect(audio, item.target_lufs, item.peak_ceiling_db, ambience,
+                level_mode=item.level_mode, target_peak_dbfs=item.target_peak_dbfs, target_rms_dbfs=item.target_rms_dbfs)
             base = audio.copy()
             pos = {"start_sample": start, "source_trim_samples": 0} if ambience else placement(
                 item.visual_time_sec, item.av_offset_ms, crest_sample(audio))
@@ -91,7 +93,11 @@ def render_effects(plan: PacingPlan, sheet: SpottingSheet, store, dialogue: Path
                                              max(0, len(base) - lead)) if dialogue else None
                 if voice is not None and lead:
                     voice = np.pad(voice, ((lead, 0), (0, 0)))
-                audio, duck_info = spectral_duck(base, voice, item.tier)
+                if (config.sfx_mix_profile == "audible" and item.tier == "accent" and
+                        config.sfx_silence_policy == "accents" and protected(item.visual_time_sec, sheet)):
+                    audio, duck_info = base.copy(), {"spectral_duck": "explicit_black_card_accent_unity"}
+                else:
+                    audio, duck_info = spectral_duck(base, voice, item.tier)
                 if ambience:
                     break
                 updated = placement(item.visual_time_sec, item.av_offset_ms, crest_sample(audio))
@@ -106,7 +112,7 @@ def render_effects(plan: PacingPlan, sheet: SpottingSheet, store, dialogue: Path
             if not (item.tier == "accent" and config.sfx_silence_policy == "accents"):
                 audio *= silence_envelope(len(audio), start / SR, sheet)[:, None]
             if np.max(np.abs(audio), initial=0) < 1e-8:
-                records.append({"event_id": item.event_id, "status": "suppressed_by_silence", "passed": True})
+                records.append({"event_id": item.event_id, "status": "suppressed_by_silence", "passed": not item.required})
                 continue
             prepared = root / "stems" / f"{item.asset_id}_prepared.wav"
             write_audio(prepared, audio)
@@ -124,6 +130,14 @@ def render_effects(plan: PacingPlan, sheet: SpottingSheet, store, dialogue: Path
             error_ms = None if ambience else (peak - target) / SR * 1000
             passed = (measured["input_tp"] <= item.peak_ceiling_db and
                       (ambience or abs(error_ms) <= 5))
+            actual_peak, actual_rms = sample_peak_db(audio), active_rms_db(audio)
+            prepared_lufs = window_loudness(audio, 3 if ambience else 0.4)
+            level_error = item.target_lufs - prepared_lufs
+            if item.level_mode == "sample_peak":
+                level_error = item.target_peak_dbfs - actual_peak
+            elif item.level_mode == "active_rms":
+                level_error = item.target_rms_dbfs - actual_rms
+            passed = passed and level_error <= 6.5
             buses[item.tier][start:start + len(audio)] += audio
             records.append({"event_id": item.event_id, "asset_id": item.asset_id,
                 "tier": item.tier, "category": item.category, "status": "placed", "passed": passed,
@@ -131,17 +145,20 @@ def render_effects(plan: PacingPlan, sheet: SpottingSheet, store, dialogue: Path
                 "end_sample": start + len(audio), "target_peak_sample": target,
                 "actual_peak_sample": peak, "landmark_error_ms": error_ms,
                 "level": level, "spectral_control": duck_info, "file_true_peak_db": measured["input_tp"],
-                "prepared_max_lufs": window_loudness(audio, 3 if ambience else 0.4),
+                "prepared_max_lufs": prepared_lufs,
+                "sample_peak_dbfs": actual_peak, "active_rms_dbfs": actual_rms,
+                "level_shortfall_db": max(0, level_error), "required": item.required,
                 "prepared_file": str(prepared.relative_to(root)),
                 "note": "RMS-crest sample landmark is a proxy for perceptual salience; inspect/listen."})
         bus_reports = {}
         for tier, bus in buses.items():
             # Summation can exceed an individual effect ceiling. Apply one constant bus
             # attenuation (no peak relocation), then verify the written bus with FFmpeg.
-            ceiling = {"ambience": -10, "foley": -6, "accent": -7}[tier]
+            ceiling = max((item.peak_ceiling_db for item in plan.effects if item.tier == tier),
+                          default={"ambience": -10, "foley": -6, "accent": -7}[tier])
             maximum = max(float(np.max(np.abs(bus[a:a + SR * 10]), initial=0))
                           for a in range(0, count, SR * 10))
-            gain = min(1, 10 ** ((ceiling - 1) / 20) / max(maximum, 1e-12))
+            gain = min(1, 10 ** (ceiling / 20) / max(maximum, 1e-12))
             path = root / f"{tier}.wav"
             _write_bus(path, bus, count, gain)
             measurement = loudness(path)
@@ -152,9 +169,33 @@ def render_effects(plan: PacingPlan, sheet: SpottingSheet, store, dialogue: Path
             bus_reports[tier] = {"file": path.name, "attenuation_db": 20 * math.log10(gain),
                 "true_peak_db": measurement["input_tp"], "ceiling_db": ceiling,
                 "passed": measurement["input_tp"] is None or measurement["input_tp"] <= ceiling}
-        _combine(root, count)
+        combined = _combine(root, count)
+        if combined["attenuation_db"] < 0:
+            combined_gain = 10 ** (combined["attenuation_db"] / 20)
+            for tier in tiers:
+                _write_bus(root / f"{tier}.wav", buses[tier], count,
+                           10 ** (bus_reports[tier]["attenuation_db"] / 20) * combined_gain)
+                bus_reports[tier]["written_true_peak_db"] = loudness(root / f"{tier}.wav")["input_tp"]
+            bridge, _ = read_audio(root / "bridge_sfx.wav")
+            write_audio(root / "bridge_sfx.wav", bridge * combined_gain)
+        shutil.copyfile(root / "sfx.wav", root / "sfx_stem.wav")
+        for record in records:
+            if record.get("status") == "placed":
+                bus_gain = bus_reports[record["tier"]]["attenuation_db"] + combined["attenuation_db"]
+                record["routed_sample_peak_dbfs"] = record["sample_peak_dbfs"] + bus_gain
+                record["bus_attenuation_db"] = bus_gain
+                if record["level"]["level_mode"] == "sample_peak":
+                    shortfall = record["level"]["target_peak_dbfs"] - record["routed_sample_peak_dbfs"]
+                    record["passed"] = record["passed"] and shortfall <= 6.5
+                if record["level"]["level_mode"] == "active_rms":
+                    shortfall = record["level"]["target_active_rms_dbfs"] - record["active_rms_dbfs"] - bus_gain
+                    record["passed"] = record["passed"] and shortfall <= 6.5
+                if record["level"]["level_mode"] == "loudness":
+                    shortfall = record["level"]["target_lufs"] - record["prepared_max_lufs"] - bus_gain
+                    record["passed"] = record["passed"] and shortfall <= 6.5
         report = {"effects": records, "buses": bus_reports, "silence_policy": config.sfx_silence_policy,
-            "passed": all(x["passed"] for x in records) and all(x["passed"] for x in bus_reports.values()),
+            "combined_bus": combined,
+            "passed": combined["passed"] and all(x["passed"] for x in records) and all(x["passed"] for x in bus_reports.values()),
             "note": "Event/bus levels are pre-master. Final loudnorm changes all stems together."}
         (root / "sfx_qc.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
@@ -180,7 +221,16 @@ def _combine(root: Path, count: int):
     sources = [wave.open(str(root / name), "rb") for name in
                ("bridge_sfx.wav", "ambience.wav", "foley.wav", "accent.wav")]
     output = root / "sfx_combined.wav"
+    maximum = 0.0
     try:
+        for a in range(0, count, SR * 10):
+            block = min(count - a, SR * 10)
+            data = sum(np.frombuffer(w.readframes(block), "<i2").astype(np.float32).reshape(-1, 2) / 32768
+                       for w in sources)
+            maximum = max(maximum, float(np.max(np.abs(data), initial=0)))
+        gain = min(1, 10 ** (-1.7 / 20) / max(maximum, 1e-12))
+        for w in sources:
+            w.rewind()
         with wave.open(str(output), "wb") as out:
             out.setnchannels(2)
             out.setsampwidth(2)
@@ -189,10 +239,19 @@ def _combine(root: Path, count: int):
                 block = min(count - a, SR * 10)
                 data = sum(np.frombuffer(w.readframes(block), "<i2").astype(np.float32).reshape(-1, 2) / 32768
                            for w in sources)
-                if np.max(np.abs(data), initial=0) >= 1:
-                    raise PipelineError("Combined SFX bus would clip; reduce effect targets")
-                _write_frames(out, data)
+                _write_frames(out, data * gain)
     finally:
         for w in sources:
             w.close()
     output.replace(root / "sfx.wav")
+    measured = loudness(root / "sfx.wav")
+    tp = measured["input_tp"]
+    if tp is not None and tp > -1.5:
+        correction = 10 ** ((-1.7 - tp) / 20)
+        data, _ = read_audio(root / "sfx.wav")
+        write_audio(root / "sfx.wav", data * correction)
+        gain *= correction
+        tp = loudness(root / "sfx.wav")["input_tp"]
+    return {"nonzero": maximum > 1e-6, "attenuation_db": 20 * math.log10(gain),
+            "true_peak_db": tp, "ceiling_db": -1.5,
+            "passed": maximum > 1e-6 and tp is not None and tp <= -1.5}

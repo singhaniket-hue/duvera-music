@@ -183,6 +183,10 @@ class RunConfig(Contract):
     accent_cooldown_sec: float = Field(default=0.6, ge=0.25, le=3)
     major_cooldown_sec: float = Field(default=1.8, ge=1, le=10)
     accent_salience_threshold: float = Field(default=0.72, ge=0.5, le=1)
+    sfx_mix_profile: Literal["research", "audible"] = "research"
+    locked_music_path: Path | None = None
+    locked_music_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    max_music_gap_sec: float = Field(default=0.75, ge=0.1, le=5)
 
     @model_validator(mode="after")
     def coherent(self):
@@ -196,4 +200,6 @@ class RunConfig(Contract):
             raise ValueError("local provider requires local_assets manifest")
         if self.visual_pacing == "render" and (not self.video_path or self.mode != "final_video"):
             raise ValueError("visual_pacing=render requires final_video and a video")
+        if bool(self.locked_music_path) != bool(self.locked_music_sha256):
+            raise ValueError("Locked music requires both a WAV path and its SHA-256")
         return self

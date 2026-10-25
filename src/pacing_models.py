@@ -22,6 +22,7 @@ class EditEvent(Contract):
     location: str | None = None
     eye_anchor: tuple[float, float] | None = None
     zoom_factor: float = Field(default=1.14, ge=1.1, le=1.25)
+    required: bool = False
 
     @model_validator(mode="after")
     def validate_event(self):
@@ -62,6 +63,19 @@ class SFXInstruction(Contract):
     peak_ceiling_db: float
     j_lead_sec: float = 0
     crossfade_sec: float = 0
+    level_mode: Literal["loudness", "sample_peak", "active_rms"] = "loudness"
+    target_peak_dbfs: float | None = None
+    target_rms_dbfs: float | None = None
+    required: bool = False
+
+
+    @model_validator(mode="after")
+    def level_contract(self):
+        if self.level_mode == "sample_peak" and self.target_peak_dbfs is None:
+            raise ValueError("sample_peak mode requires target_peak_dbfs")
+        if self.level_mode == "active_rms" and self.target_rms_dbfs is None:
+            raise ValueError("active_rms mode requires target_rms_dbfs")
+        return self
 
 
 class VisualInstruction(Contract):
@@ -88,3 +102,4 @@ class PacingPlan(Contract):
     decisions: list[dict] = Field(default_factory=list)
     pause_review: list[dict] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    blocking_issues: list[str] = Field(default_factory=list)

@@ -43,8 +43,16 @@ class CardTracker:
         black = float(np.median(gray)) < 12 and np.mean(gray < 24) > 0.90
         luma = float(np.mean(gray))
         previous_luma, self.previous_luma = self.previous_luma, luma
-        mask = cv2.dilate((gray > 180).astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
-        sparse_text = 0.0015 < np.mean(mask) < 0.12
+        bright = (gray > 180).astype(np.uint8)
+        # Measure BEFORE dilation so compact vertical typography is not discarded.
+        # Remove isolated sparkle/compression pixels; this remains mask evidence, not OCR.
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(bright, 8)
+        keep = np.zeros(count, dtype=bool)
+        for index in range(1, count):
+            keep[index] = stats[index, cv2.CC_STAT_AREA] >= 2
+        cleaned = keep[labels]
+        mask = cv2.dilate(cleaned.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+        sparse_text = 0.0003 < np.mean(cleaned) < 0.12
         found = []
         if not black:
             self.seen_picture = True
@@ -61,7 +69,7 @@ class CardTracker:
         if not sparse_text:
             self.pending, self.pending_count = None, 0
             return found
-        if self.committed is not None and self.iou(mask, self.committed) >= 0.3:
+        if self.committed is not None and self.iou(mask, self.committed) >= 0.65:
             self.pending, self.pending_count = None, 0
             return found
         if self.pending is None or self.iou(mask, self.pending) < 0.7:

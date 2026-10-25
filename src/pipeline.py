@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import wave
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from .providers.google_flow import GoogleFlowProvider, load_browser_config
 from .visuals import analyze_video
 from .vocals import VocalGuard
 from .visual_pacing import validate_render_source
+from .music_continuity import build_locked_stems, music_gap_qc, sha256, validate_locked_music
 
 
 def save_json(path: Path, value):
@@ -42,7 +44,7 @@ def _fingerprint(config: RunConfig) -> str:
                     raise PipelineError(f"Input file not found: {value}")
                 stat = value.stat()
                 files[name] = [str(value.resolve()), stat.st_size, stat.st_mtime_ns]
-    return hashlib.sha256(json.dumps(["sfx-pacing-v1", data, files], sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(["sfx-audibility-v2", data, files], sort_keys=True).encode()).hexdigest()
 
 
 def _branches(config: RunConfig):
@@ -58,10 +60,10 @@ def _gate(config: RunConfig, sheet: SpottingSheet, pacing=None):
     planned = {}
     for name, manifest in _branches(config):
         if manifest:
-            validate_manifest_for_sheet(manifest, sheet, pacing)
+            validate_manifest_for_sheet(manifest, sheet, pacing, bool(config.locked_music_path))
             planned[name] = {"mode": "imported", "requests": 0, "seconds": 0}
             continue
-        jobs = list(generation_jobs(sheet, pacing))
+        jobs = list(generation_jobs(sheet, pacing, bool(config.locked_music_path)))
         if name == "google_flow" and pacing and pacing.effects:
             raise PipelineError("Pacing SFX on the Google branch require imported assets; the music browser UI "
                                 "is not a verified three-tier SFX generator. Supply --google-flow-assets.")
@@ -154,7 +156,9 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
             from .narrative import narrative_events
             candidates = [e for e in narrative_events(transcript) if e["kind"] in {"contrast", "emphasis"}] if config.visual_pacing != "off" else []
             detected, analysis = detect_video(config.video_path, duration, candidates)
-            graph = EventGraph(events=graph.events + detected.events)
+            additions = [e for e in detected.events if not any(e.kind == supplied.kind and
+                         abs(e.time_sec - supplied.time_sec) < 0.35 for supplied in graph.events)]
+            graph = EventGraph(events=graph.events + additions)
             save_json(root / "pacing_analysis.json", analysis)
         pacing = schedule(graph, sheet, transcript, config)
     visual_source = validate_render_source(config.video_path) if config.visual_pacing == "render" else None
@@ -164,21 +168,34 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
     export_script(sheet, transcript, config, root)
     jobs = [{"cue_id": c.cue_id, "kind": kind, "duration_seconds": seconds, "prompt": prompt,
              "loop": getattr(c, "loop", False)}
-            for c, kind, seconds, prompt in generation_jobs(sheet, pacing)]
+            for c, kind, seconds, prompt in generation_jobs(sheet, pacing, bool(config.locked_music_path))]
     save_json(root / "generation_plan.json", {
         "branches": [name for name, _ in _branches(config)] if config.mode != "script_only" else [],
         "jobs_per_generated_branch": jobs,
         "max_requests_per_provider": config.max_requests,
         "max_generated_seconds_per_provider": config.max_generated_seconds,
+        "sfx_mode": config.sfx_mode, "sfx_silence_policy": config.sfx_silence_policy,
+        "sfx_mix_profile": config.sfx_mix_profile, "accepted_sfx_count": len(pacing.effects),
+        "blocking_issues": pacing.blocking_issues,
+        "locked_music_sha256": config.locked_music_sha256,
         "note": "Duration/request caps are not monetary price estimates. Imports do not make provider calls.",
     })
     if config.mode == "script_only" or plan_only:
-        return {"status": "planned", "output_dir": str(root.resolve()), "timing_source": sheet.timing_source}
+        return {"status": "planned", "output_dir": str(root.resolve()), "timing_source": sheet.timing_source,
+                "sfx_count": len(pacing.effects), "blocking_issues": pacing.blocking_issues}
+    if pacing.blocking_issues:
+        raise PipelineError("; ".join(pacing.blocking_issues))
+    if config.locked_music_path:
+        validate_locked_music(config, duration, sheet)
     planned = _gate(config, sheet, pacing)
     guard = VocalGuard(config, root / "vocal_checks")
     # Validate checker/model/device before any provider generates credit-consuming audio.
-    if any(kind == "music" for _, kind, _, _ in generation_jobs(sheet)):
+    if config.locked_music_path or any(kind == "music" for _, kind, _, _ in generation_jobs(sheet)):
         guard.prepare()
+    if config.locked_music_path:
+        approved = guard.inspect("locked/music", config.locked_music_path)
+        if sha256(approved) != config.locked_music_sha256:
+            raise PipelineError("Vocal stripping would alter locked music. Resolve/review the bed before locking it.")
     providers = {}
     try:
         # Open/check Google first, before spending on ElevenLabs in comparison mode.
@@ -192,29 +209,48 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
             branch.mkdir(exist_ok=True)
             store = AssetStore(branch / "stems", config, manifest, providers.get(name))
             store.safe_music = {}
-            for cue, kind, seconds, prompt in generation_jobs(sheet, pacing):
+            for cue, kind, seconds, prompt in generation_jobs(sheet, pacing, bool(config.locked_music_path)):
                 asset = store.get(cue.cue_id, prompt, seconds, kind, loop=getattr(cue, "loop", False))
                 if kind == "music":
                     store.safe_music[cue.cue_id] = guard.inspect(f"{name}/{cue.cue_id}", asset)
-            music, sfx, records = build_stems(sheet, store, dialogue, branch, config)
+            music, sfx, records = (build_locked_stems(sheet, config, branch) if config.locked_music_path else
+                                   build_stems(sheet, store, dialogue, branch, config))
+            continuity = music_gap_qc(music, sheet, config.max_music_gap_sec)
             sfx_qc = render_effects(pacing, sheet, store, dialogue, branch, config) if pacing.effects else None
+            if sfx_qc:
+                sfx = branch / "sfx_stem.wav"
+                for item in sfx_qc["effects"]:
+                    print(json.dumps({"sfx_event": item["event_id"], "tier": item.get("tier"),
+                        "start_sec": item.get("start_sample", 0) / SR,
+                        "peak_sec": item["actual_peak_sample"] / SR if item.get("actual_peak_sample") is not None else None,
+                        "routed_sample_peak_dbfs": item.get("routed_sample_peak_dbfs"),
+                        "active_rms_dbfs": item.get("active_rms_dbfs"), "status": item["status"],
+                        "passed": item["passed"]}, ensure_ascii=False), file=sys.stderr)
             export_script(sheet, transcript, config, branch)
             export_timeline(sheet, config, branch, records, dialogue, pacing)
             qc = {"provider": name, "source": planned[name], "cues": records, "mastering": None,
-                  "vocal_policy": config.vocal_policy, "sfx_pacing": sfx_qc,
+                  "vocal_policy": config.vocal_policy, "sfx_pacing": sfx_qc, "music_continuity": continuity,
+                  "locked_music_sha256": config.locked_music_sha256,
+                  "locked_music_vocal_check": guard.reports.get("locked/music"),
                   "vocal_checks": {key.split("/", 1)[1]: value for key, value in guard.reports.items()
                                    if key.startswith(name + "/")}}
-            if config.mode == "final_video":
+            if config.mode == "final_video" and continuity["passed"] and (sfx_qc is None or sfx_qc["passed"]):
                 qc["mastering"] = render(dialogue, music, sfx, branch, config, pacing, visual_source)
+            elif config.mode == "final_video":
+                qc["mastering"] = {"passed": False, "encoded_measurement": {},
+                                   "note": "Premux SFX/continuity QC failed; no final video was muxed"}
             save_json(branch / "qc_report.json", qc)
             results[name] = qc
         if config.provider == "both_compare":
             comparison_report(results, root)
         qc_passed = all((q["mastering"] is None or q["mastering"]["passed"]) and
+                        q["music_continuity"]["passed"] and
                         (q["sfx_pacing"] is None or q["sfx_pacing"]["passed"]) for q in results.values())
         summary = {"status": "complete" if qc_passed else "qc_failed",
                    "output_dir": str(root.resolve()), "providers": list(results),
                    "timing_source": sheet.timing_source,
+                   "sfx_mode": config.sfx_mode, "sfx_count": len(pacing.effects),
+                   "sfx_silence_policy": config.sfx_silence_policy, "sfx_mix_profile": config.sfx_mix_profile,
                    "vocal_check": ("not_required_no_music" if not guard.reports else
                                    "disabled_unchecked" if config.vocal_policy == "off" else "model_proxy_checked")}
         save_json(root / "run_summary.json", summary)
