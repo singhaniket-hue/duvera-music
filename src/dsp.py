@@ -325,7 +325,8 @@ def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig
                   ["-c:v","libx264","-preset","medium","-crf","18","-pix_fmt","yuv420p","-vf",video_filter])
     ffmpeg("-i", config.video_path, "-i", master, "-map", "0:v:0", "-map", "1:a:0",
            *picture_args, "-c:a", "aac", "-b:a", "192k",
-           "-ar", SR, "-movflags", "+faststart", "-shortest", video)
+           "-ar", SR, "-movflags", "+faststart",
+           *([] if config.documentary_edit_mode=='render' else ['-shortest']), video)
     # Measure the actual encoded output: AAC can change true peaks.
     final_qc = loudness(video)
     audibility=None

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import numpy as np
 
 from .archival import ArchivalInsertWindow, protect_archival
 from .dialogue_polish import polish_dialogue
-from .documentary_audio import build_documentary_sfx_stem
+from .documentary_audio import build_documentary_sfx_stem, apply_pre_silence_reverb_tails
 from .dsp import build_stems, render
 from .event_scheduler import schedule
 from .media import PipelineError, SR, ffmpeg, read_audio
@@ -172,10 +173,37 @@ def score_project(project_path, manifest_path):
     save(root / "full_pacing_plan.json", pacing.model_dump())
     store = AssetStore(target / "stems", config, Path(manifest_path), None)
     store.safe_music = {key: Path(value) for key, value in manifest["music"].items()}
+    # Retain the exact approved source bytes, but loop their measured active core
+    # rather than repeating quiet generated outro padding every 45 seconds.
+    measured_loops = {}
+    for key, path in store.safe_music.items():
+        audio, _ = read_audio(path)
+        blocks = len(audio) // 480
+        power = np.mean(audio[: blocks * 480].astype(float).reshape(blocks, 480, 2) ** 2, axis=(1, 2))
+        db = 10 * np.log10(np.maximum(power, 1e-14))
+        threshold = max(-48, float(db.max()) - 25)
+        active = np.flatnonzero(db > threshold)
+        if not len(active):
+            raise PipelineError("Approved music has no active region for a real loop")
+        start, end = float(active[0]) * 0.01, float(active[-1] + 1) * 0.01
+        if end - start < 5:
+            raise PipelineError("Active music loop is too short; review the source")
+        measured_loops[key] = {
+            "start_sec": start,
+            "end_sec": end,
+            "method": "measured_active_core",
+            "beat_quantized": False,
+            "bar_phase_verified": False,
+            "threshold_dbfs": threshold,
+            "source_sha256": sha(path),
+        }
+    store.assets["loops"] = measured_loops
+    save(root / "measured_music_loops.json", measured_loops)
     store.acoustic = {effect.asset_id: effect for effect in pacing.effects}
     for effect in pacing.effects:
         store.get(effect.asset_id, effect.prompt, effect.generation_sec, "sfx")
     music, sfx, records = build_stems(sheet, store, dialogue, target, config)
+    tails = apply_pre_silence_reverb_tails(music, sheet, root / "music_tail_processing.json")
     continuity = music_gap_qc(music, sheet, config.max_music_gap_sec)
     if not continuity["passed"]:
         raise PipelineError("Unexpected full-score music gap")
@@ -244,6 +272,7 @@ def score_project(project_path, manifest_path):
         "dialogue_polish": polish,
         "music_continuity": continuity,
         "cues": records,
+        "music_silence_tails": tails,
         "vocal_checks": vocal_report,
         "source_receipt": receipt,
         "synthetic_media_used": False,
@@ -251,6 +280,16 @@ def score_project(project_path, manifest_path):
     save(root / "delivery-qc.json", report)
     raw = ffmpeg("-i", video, "-af", "ebur128=peak=true", "-f", "null", "-")
     (root / "ebur128.log").write_text(raw, encoding="utf-8")
+    integrated = float(re.findall(r"I:\s+(-?[\d.]+)\s+LUFS", raw)[-1])
+    true_peak = float(re.findall(r"Peak:\s+(-?[\d.]+)\s+dBFS", raw)[-1])
+    report["ebur128"] = {
+        "integrated_lufs": integrated,
+        "true_peak_dbtp": true_peak,
+        "passed": abs(integrated + 15) <= 1 and true_peak <= -1,
+    }
+    passed = passed and report["ebur128"]["passed"]
+    report["passed"] = passed
+    save(root / "delivery-qc.json", report)
     if not passed:
         raise PipelineError("Full film protection/closing/frame verification failed")
     return video

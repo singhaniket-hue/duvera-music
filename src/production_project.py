@@ -40,6 +40,27 @@ def video_info(path):
     return stream, int(stream["nb_frames"])
 
 
+PICTURE_CLOCK_FILTER = "setts=pts=round(PTS*TB*60)/(TB*60):dts=round(DTS*TB*60)/(TB*60):duration=1/(TB*60)"
+
+
+def normalize_picture_clock(source, destination):
+    """Snap packet clocks to the known 60fps frame grid; encoded picture bytes are retained."""
+    ffmpeg(
+        "-i",
+        source,
+        "-an",
+        "-c:v",
+        "copy",
+        "-bsf:v",
+        PICTURE_CLOCK_FILTER,
+        "-video_track_timescale",
+        "15360",
+        "-movflags",
+        "+faststart",
+        destination,
+    )
+
+
 def prepare_part(spec, root):
     name = spec["id"]
     target = root / "parts" / name
@@ -108,6 +129,8 @@ def prepare_part(spec, root):
         )
         transcript = Transcript.model_validate_json(config.transcript_path.read_text(encoding="utf-8"))
         stream, _ = video_info(source)
+        if stream["avg_frame_rate"] != "60/1" or (stream["width"], stream["height"]) != (1920, 1080):
+            raise PipelineError("Full-project camera inputs must be normalized to 1920x1080 at 60fps")
         duration = int(stream["nb_frames"]) / 60
         raw = target / "dialogue.wav"
         extract_audio(source, raw, duration)
@@ -148,7 +171,11 @@ def assembly_segments(receipts, parts, insertions):
         )
         for insertion in items:
             boundary = round(mapping.time(insertion["at_source_sec"]) * 60)
-            if boundary <= local or boundary >= receipt["frames"]:
+            # Keep the short camera tail before an end-of-sentence insert, avoiding
+            # a 100ms flash of the same shot between the archive and the next part.
+            if 0 <= receipt["frames"] - boundary <= 12:
+                boundary = receipt["frames"]
+            if boundary <= local or boundary > receipt["frames"]:
                 raise PipelineError("Invalid pause/resume insert boundary")
             result.append(
                 {
@@ -166,17 +193,18 @@ def assembly_segments(receipts, parts, insertions):
             result.append({"kind": "archive", "output_start_frame": cursor, "frames": count, **insertion})
             cursor += count
             local = boundary
-        result.append(
-            {
-                "kind": "camera",
-                "part_id": spec["id"],
-                "source_start_frame": local,
-                "source_end_frame": receipt["frames"],
-                "output_start_frame": cursor,
-                "picture": receipt["picture"],
-                "dialogue": receipt["dialogue"],
-            }
-        )
+        if local < receipt["frames"]:
+            result.append(
+                {
+                    "kind": "camera",
+                    "part_id": spec["id"],
+                    "source_start_frame": local,
+                    "source_end_frame": receipt["frames"],
+                    "output_start_frame": cursor,
+                    "picture": receipt["picture"],
+                    "dialogue": receipt["dialogue"],
+                }
+            )
         cursor += receipt["frames"] - local
     return result, cursor
 
@@ -188,7 +216,11 @@ def remap_part_time(part_id, time, segments):
         if frame < segment["source_end_frame"]:
             return (segment["output_start_frame"] + max(0, frame - segment["source_start_frame"])) / 60
     segment = matching[-1]
-    return (segment["output_start_frame"] + segment["source_end_frame"] - segment["source_start_frame"]) / 60
+    end = segment["output_start_frame"] + segment["source_end_frame"] - segment["source_start_frame"]
+    for item in segments:
+        if item["kind"] == "archive" and item.get("part_id") == part_id and item["output_start_frame"] == end:
+            end += item["frames"]
+    return end / 60
 
 
 def render_assembly(segments, frames, root):
@@ -200,7 +232,12 @@ def render_assembly(segments, frames, root):
     sound = np.zeros((round(frames / 60 * SR), 2), np.float32)
     archives = []
     for number, segment in enumerate(segments):
-        target = pieces / f"{number:03}.mp4"
+        # Plan-keyed pieces prevent stale footage from a previous assembly plan
+        # being reused merely because it has the same number of frames.
+        digest = hashlib.sha256(
+            ("archive-clock-v2" + json.dumps(segment, sort_keys=True)).encode()
+        ).hexdigest()[:16]
+        target = pieces / f"{number:03}-{digest}.mp4"
         start = segment["output_start_frame"] * 800
         if segment["kind"] == "camera":
             first, last = segment["source_start_frame"], segment["source_end_frame"]
@@ -239,7 +276,7 @@ def render_assembly(segments, frames, root):
             label = credit_png(segment["credit"], 1920, 1080, root / "archive_credits")
             if not target.exists():
                 filt = (
-                    "[0:v]fps=60,split=2[b][f];[b]scale=1920:1080:force_original_aspect_ratio=increase,"
+                    "[0:v]fps=60,setpts=PTS-STARTPTS,split=2[b][f];[b]scale=1920:1080:force_original_aspect_ratio=increase,"
                     "crop=1920:1080,gblur=sigma=22,eq=brightness=-0.15[bg];"
                     "[f]scale=1920:1080:force_original_aspect_ratio=decrease[fg];"
                     "[bg][fg]overlay=(W-w)/2:(H-h)/2[image];[image][1:v]overlay=0:0[v]"
@@ -253,8 +290,6 @@ def render_assembly(segments, frames, root):
                     "1",
                     "-i",
                     label,
-                    "-t",
-                    count / 60,
                     "-filter_complex",
                     filt,
                     "-map",
@@ -313,10 +348,25 @@ def render_assembly(segments, frames, root):
     )
     picture = root / "full_picture.mp4"
     ffmpeg(
-        "-f", "concat", "-safe", "0", "-i", concat, "-an", "-c:v", "copy", "-movflags", "+faststart", picture
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        concat,
+        "-an",
+        "-c:v",
+        "copy",
+        "-bsf:v",
+        PICTURE_CLOCK_FILTER,
+        "-video_track_timescale",
+        "15360",
+        "-movflags",
+        "+faststart",
+        picture,
     )
-    _, actual = video_info(picture)
-    if actual != frames:
+    stream, actual = video_info(picture)
+    if actual != frames or stream["avg_frame_rate"] != "60/1":
         raise PipelineError("Full film picture lost frames during assembly")
     write_audio(root / "dialogue_assembled.wav", sound)
     return picture, archives

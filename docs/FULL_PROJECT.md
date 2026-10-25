@@ -23,6 +23,14 @@ conforming to DocumentaryEditPlan. Use absolute paths. An insertion declares
 `duration_sec`, and a visible `credit`. Its boundary snaps to a source video frame
 after the retake map, and all subsequent ASR, effects and silence times shift by
 the inserted frame count. `assembly_plan.json` records every interval.
+Insertions within the final 200ms of a camera part absorb that quiet handle before
+the insert, avoiding a brief camera flash afterward. Assembly pieces are keyed by
+their complete segment plan; archive video limits use the exact output frame count
+instead of a floating-point duration cutoff.
+The final remux snaps PTS/DTS and packet duration to the exact 60fps grid to remove
+container-time rounding across clips. It retains the encoded picture payloads.
+The controlled documentary mux also retains the final AAC packet instead of
+truncating it with a shortest-stream cutoff.
 
 `media_cutaway` events hold actual video or photo pixels over the real narration.
 They require a file, hash and attribution; videos cannot be looped or padded to
@@ -46,6 +54,9 @@ entries identify cue_001 through cue_004, and `vocal_qc_path` identifies the
 VocalGuard receipt. All source hashes must match selected, successfully checked
 assets. Generation is a separate explicit provider/budget step; mastering cannot
 generate or automatically regenerate a paid asset.
+The score loops the measured active core of each unchanged, approved asset rather
+than repeating quiet generated outro padding. These bounds are explicitly labelled
+as measured energy windows, with unverified musical bar phase.
 
 The grade feathers its skin-protection mask at quarter resolution and caches
 stable anchors. It retains the source-pixel feather width while avoiding an

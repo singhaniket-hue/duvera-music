@@ -10,6 +10,45 @@ from scipy.signal import butter, sosfilt
 from .media import SR, PipelineError, ffmpeg, extract_audio, loudness, normalize, read_audio, write_audio
 
 
+def apply_pre_silence_reverb_tails(music,sheet,receipt_path):
+    """Bounded reflections of the real bed, wholly BEFORE protected chapter/thesis speech."""
+    import hashlib
+    def digest():
+        return hashlib.sha256(music.read_bytes()).hexdigest()
+    original=digest()
+    if receipt_path.exists():
+        cached=json.loads(receipt_path.read_text())
+        if cached.get('output_sha256')==original:
+            return cached
+    audio,_=read_audio(music)
+    windows=[]
+    for window in sheet.silence_windows:
+        if window.kind=='archival' or not window.accent_event_ids:
+            continue
+        end=round(window.start_sec*SR)
+        length=round(min(.2,window.fade_sec)*SR)
+        start=max(0,end-length)
+        dry=audio[start:end].copy()
+        tail=np.zeros_like(dry)
+        for delay,gain in ((.013,.22),(.023,.16),(.037,.11),(.053,.07)):
+            lag=round(delay*SR)
+            if lag<len(tail):
+                tail[lag:]+=dry[:-lag]*gain
+        if len(tail):
+            tail*=np.linspace(1,0,len(tail),dtype=np.float32)[:,None]**2
+            audio[start:end]+=tail
+        windows.append({'silence_start_sec':window.start_sec,'silence_end_sec':window.end_sec,
+                        'tail_ms':length/SR*1000,'source':'recorded music reflections only'})
+    # All protected windows still have hard sample-zero added music.
+    for window in sheet.silence_windows:
+        audio[round(window.start_sec*SR):round(window.end_sec*SR)]=0
+    write_audio(music,audio)
+    report={'input_sha256':original,'output_sha256':digest(),'windows':windows,
+            'method':'real-source delayed early reflections decaying before the protected boundary'}
+    receipt_path.write_text(json.dumps(report,indent=2))
+    return report
+
+
 def build_documentary_sfx_stem(pacing,sheet,store,dialogue,root,config):
     from .dsp_mixer import render_effects
     expected=[e for e in pacing.effects if e.required]

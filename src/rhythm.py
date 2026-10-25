@@ -13,8 +13,9 @@ def plan_loop(audio: np.ndarray, analysis: dict, entry: float = 0,
         start, end = float(explicit["start_sec"]), float(explicit["end_sec"])
         if not 0 <= start < end <= duration or end - start < 0.1:
             raise ValueError("Supplied loop region must lie inside the source audio")
-        return {"start_sec": start, "end_sec": end, "method": "user_supplied_loop",
-                "beat_quantized": True, "bar_phase_verified": "user_supplied",
+        return {"start_sec": start, "end_sec": end, "method": explicit.get('method','user_supplied_loop'),
+                "beat_quantized": explicit.get('beat_quantized',True),
+                "bar_phase_verified": explicit.get('bar_phase_verified','user_supplied'),
                 "period_sec": end - start}
     beats = np.asarray(analysis.get("beats", []), dtype=float)
     beats = beats[np.isfinite(beats)]
