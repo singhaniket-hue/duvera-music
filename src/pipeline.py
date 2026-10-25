@@ -30,6 +30,7 @@ from .archival import ArchivalWindows, archival_windows, protect_archival
 from .documentary import chapter_events, chapter_summary
 from .dialogue_polish import polish_dialogue
 from .procedural_sfx import procedural_jobs
+from .sfx_library import SFXAssetLibrary, ALIASES, PROMPTS, canonical_name
 
 
 def save_json(path: Path, value):
@@ -48,7 +49,7 @@ def _fingerprint(config: RunConfig) -> str:
                     raise PipelineError(f"Input file not found: {value}")
                 stat = value.stat()
                 files[name] = [str(value.resolve()), stat.st_size, stat.st_mtime_ns]
-    return hashlib.sha256(json.dumps(["documentary-editor-v4", data, files], sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(["cinema-html-acoustic-v1", data, files], sort_keys=True).encode()).hexdigest()
 
 
 def _branches(config: RunConfig):
@@ -63,6 +64,8 @@ def _gate(config: RunConfig, sheet: SpottingSheet, pacing=None):
     """Validate BOTH branches and the entire generation budget before any paid request."""
     planned = {}
     procedural = procedural_jobs(pacing, config)
+    library = SFXAssetLibrary(config.sfx_cache_dir)
+    acoustic = {e.asset_id: e for e in pacing.effects if e.category in (set(ALIASES) | set(PROMPTS))} if pacing else {}
     for name, manifest in _branches(config):
         if manifest:
             validate_manifest_for_sheet(manifest, sheet, pacing, bool(config.locked_music_path), procedural)
@@ -70,8 +73,19 @@ def _gate(config: RunConfig, sheet: SpottingSheet, pacing=None):
             continue
         jobs = list(generation_jobs(sheet, pacing, bool(config.locked_music_path)))
         jobs = [j for j in jobs if not (j[1] == "sfx" and j[0].cue_id in procedural)]
+        billable, seen = [], set()
+        for job in jobs:
+            cue, kind, seconds, prompt = job
+            if kind == "sfx" and cue.cue_id in acoustic:
+                asset_name = canonical_name(acoustic[cue.cue_id].category)
+                if library.cached(asset_name) or asset_name in seen:
+                    continue
+                seen.add(asset_name)
+                job = (cue, kind, 1.0, prompt)
+            billable.append(job)
+        jobs = billable
         if not jobs:
-            planned[name] = {"mode": "procedural_only", "requests": 0, "seconds": 0}
+            planned[name] = {"mode": "cached_acoustic_only", "requests": 0, "seconds": 0}
             continue
         if name == "google_flow" and any(j[1] == "sfx" for j in jobs) and pacing and pacing.effects:
             raise PipelineError("Pacing SFX on the Google branch require imported assets; the music browser UI "
@@ -214,9 +228,12 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
     pacing_sheet_hash.write_text(sheet_hash + "\n")
     export_script(sheet, transcript, config, root)
     procedural = procedural_jobs(pacing, config)
-    jobs = [{"cue_id": c.cue_id, "kind": kind, "duration_seconds": seconds, "prompt": prompt,
-             "loop": getattr(c, "loop", False), "source": "procedural" if kind == "sfx" and c.cue_id in procedural else "import_or_provider",
-             "billable_if_generated": not (kind == "sfx" and c.cue_id in procedural)}
+    library = SFXAssetLibrary(config.sfx_cache_dir)
+    acoustic = {e.asset_id: e for e in pacing.effects if e.category in (set(ALIASES) | set(PROMPTS))}
+    jobs = [{"cue_id": c.cue_id, "kind": kind, "duration_seconds": 1.0 if kind == "sfx" and c.cue_id in acoustic else seconds,
+             "prompt": PROMPTS[canonical_name(acoustic[c.cue_id].category)] if kind == "sfx" and c.cue_id in acoustic else prompt,
+             "loop": getattr(c, "loop", False), "source": "acoustic_library" if kind == "sfx" and c.cue_id in acoustic else "import_or_provider",
+             "billable_if_generated": not (kind == "sfx" and c.cue_id in acoustic and library.cached(acoustic[c.cue_id].category))}
             for c, kind, seconds, prompt in generation_jobs(sheet, pacing, bool(config.locked_music_path))]
     save_json(root / "generation_plan.json", {
         "branches": [name for name, _ in _branches(config)] if config.mode != "script_only" else [],
@@ -261,6 +278,7 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
             store = AssetStore(branch / "stems", config, manifest, providers.get(name))
             store.safe_music = {}
             store.procedural = procedural
+            store.acoustic = acoustic
             for cue, kind, seconds, prompt in generation_jobs(sheet, pacing, bool(config.locked_music_path)):
                 asset = store.get(cue.cue_id, prompt, seconds, kind, loop=getattr(cue, "loop", False))
                 if kind == "music":
@@ -268,7 +286,11 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
             music, sfx, records = (build_locked_stems(sheet, config, branch) if config.locked_music_path else
                                    build_stems(sheet, store, dialogue, branch, config))
             continuity = music_gap_qc(music, sheet, config.max_music_gap_sec)
-            sfx_qc = render_effects(pacing, sheet, store, dialogue, branch, config) if pacing.effects else None
+            if documentary and pacing.effects:
+                from .documentary_audio import build_documentary_sfx_stem
+                sfx_qc=build_documentary_sfx_stem(pacing,sheet,store,dialogue,branch,config)
+            else:
+                sfx_qc = render_effects(pacing, sheet, store, dialogue, branch, config) if pacing.effects else None
             if sfx_qc:
                 sfx = branch / "sfx_stem.wav"
                 for item in sfx_qc["effects"]:

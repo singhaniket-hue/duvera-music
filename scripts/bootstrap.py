@@ -43,7 +43,7 @@ def main():
     python = env / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     target = str(ROOT) + ("[" + ",".join(extras) + "]" if extras else "")
     subprocess.run([str(python), "-m", "pip", "install", "-e", target], check=True)
-    if "browser" in extras:
+    if "browser" in extras or "edit" in extras:
         subprocess.run([str(python), "-m", "playwright", "install", "chromium"], check=True)
     subprocess.run([str(python), "-m", "src.cli", "--check-env"], cwd=ROOT, check=True)
     print(f"Ready. Python: {python}")

@@ -124,7 +124,7 @@ def schedule(graph: EventGraph, sheet: SpottingSheet, transcript: Transcript, co
             decision["reason"] = "protected punchline silence"
             continue
         major = event.kind in {"black_card", "impact"}
-        if (event.time_sec - last_accent < config.accent_cooldown_sec or
+        if not event.documentary_card_id and (event.time_sec - last_accent < config.accent_cooldown_sec or
                 (major and event.time_sec - last_major < config.major_cooldown_sec)):
             decision["reason"] = "refractory cooldown"
             continue
@@ -154,14 +154,22 @@ def schedule(graph: EventGraph, sheet: SpottingSheet, transcript: Transcript, co
     lookup = {e.event_id: e for e in graph.events}
     for effect in result.effects:
         effect.required = lookup[effect.event_id].required
+        if config.documentary_edit_mode != "off" and effect.tier == "accent":
+            effect.av_offset_ms = 10 if effect.category == "sub_drop" else 8
+            effect.generation_sec = 1.0
         if config.sfx_mix_profile == "audible":
             if effect.tier == "ambience":
                 effect.level_mode, effect.target_rms_dbfs = "active_rms", -28
             else:
                 effect.level_mode = "sample_peak"
-                effect.target_peak_dbfs = -3.5 if effect.category == "sub_drop" else -9.5 if (
-                    effect.category == "ui_tick" and config.documentary_edit_mode != "off") else -8
-                effect.peak_ceiling_db = -3 if effect.category == "sub_drop" else effect.peak_ceiling_db
+                effect.target_peak_dbfs = -3.5 if effect.category == "sub_drop" else -7
+                effect.peak_ceiling_db = -3.5 if effect.category == "sub_drop" else -5
+        event=lookup[effect.event_id]
+        if event.documentary_card_id and event.target_peak_dbfs is not None:
+            effect.level_mode='sample_peak'
+            effect.target_peak_dbfs=event.target_peak_dbfs
+            effect.peak_ceiling_db=event.target_peak_dbfs+.5
+            effect.duration_sec={'sub_drop':.8,'paper_slide':.4,'ui_tick':.16,'whoosh':.45}.get(effect.category,.3)
     for decision in result.decisions:
         if decision["required"] and not decision["accepted"]:
             result.blocking_issues.append(f"Required event {decision['event_id']}: {decision['reason']}")

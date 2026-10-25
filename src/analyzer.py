@@ -38,6 +38,35 @@ def transcribe(path: Path, config: RunConfig, hint: str) -> Transcript:
             segments.append(Segment(start=max(0, s.start), end=s.end, text=s.text.strip()))
             words.extend({"start": max(0, w.start), "end": w.end, "word": w.word}
                          for w in (s.words or []) if w.end > max(0, w.start))
+    if config.retake_autocut and config.documentary_edit_mode!='off':
+        # Whisper can collapse an entire restart/cough into one multi-second word.
+        # Re-decode its two halves; replace only when both independently contain a
+        # repeated prefix, retaining all timed tokens for the source-clock cutter.
+        from faster_whisper.audio import decode_audio
+        from .retake_cutter import token
+        from difflib import SequenceMatcher
+        samples=decode_audio(str(path),sampling_rate=16000)
+        repairs=[]
+        for index,word in enumerate(list(words)):
+            if word['end']-word['start']<1.2:
+                continue
+            a=max(0,word['start']-.2)
+            b=min(len(samples)/16000,word['end']+1.5)
+            midpoint=(word['start']+word['end'])/2
+            takes=[]
+            for lo,hi in ((a,midpoint),(midpoint,b)):
+                result,_=model.transcribe(samples[round(lo*16000):round(hi*16000)],
+                    **{**whisper_options(config.language,hint),'vad_filter':False,'condition_on_previous_text':False})
+                takes.append([{'start':lo+w.start,'end':lo+w.end,'word':w.word}
+                    for chunk in result for w in (chunk.words or []) if w.end>w.start])
+            if all(len(t)>=2 for t in takes) and all(
+                SequenceMatcher(None,token(takes[0][i]['word']),token(takes[1][i]['word'])).ratio()>=.75 for i in (0,1)):
+                # Only replace words fully inside the decoded window, keeping boundary words.
+                replacement=[w for take in takes for w in take if a<=w['start'] and w['end']<=b]
+                words=[w for w in words if w['start']<a or w['end']>b]+replacement
+                repairs.append({'start_sec':a,'end_sec':b,'reason':'two independent raw ASR passes preserve repeated prefix'})
+        words.sort(key=lambda w:w['start'])
+        (config.output_dir/'asr_retake_repairs.json').write_text(json.dumps(repairs,indent=2))
     (config.output_dir / "word_timestamps.json").write_text(json.dumps(words, ensure_ascii=False, indent=2))
     return Transcript(segments=segments, timing_source="asr", words=words)
 

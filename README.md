@@ -1,5 +1,18 @@
 # Duvera Music Director
 
+Production V2 adds raw-ASR retake cutting, real publisher image cards, complete
+word-synced slogans, post-normalization acoustic effects with an encoded-MP4
+audibility gate, thesis silence/creep zooms and a selective room grade.
+See [Production V2](docs/PRODUCTION_V2.md) for contracts and real-source verification.
+For complete films, see [multi-part projects](docs/FULL_PROJECT.md): source-sound
+inserts, attributed B-roll/pages, checked chapter music and full-programme QC.
+
+Production graphics now use Chromium HTML/CSS and real iris-anchored footage; sound
+effects come from the permanent acoustic library/ElevenLabs. Synthetic demo AV and
+procedural production SFX are disabled. See [the cinema upgrade](docs/CINEMA_UPGRADE.md)
+for setup and the supported real-media verification workflow. It supersedes the legacy
+offline fixture and Pillow/procedural instructions below.
+
 Dialogue-aware music direction, three-tier sound design, and documentary picture editing for YouTube videos.
 Built for English, Hindi and Hinglish, including Duvera-style reflective narration.
 

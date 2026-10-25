@@ -83,7 +83,12 @@ class SchedulerTests(unittest.TestCase):
 
     def test_sfx_budget_counts_before_spend_and_google_requires_imports(self):
         result = schedule(EventGraph(events=[event("a", 1), event("b", 3)]), self.sheet, self.transcript, self.config)
-        config = self.config.model_copy(update={"provider": "elevenlabs", "max_requests": 1})
+        # Cache keys are shared across repeated acoustic events. Test two genuinely
+        # distinct cache misses, independent of the developer's persistent library.
+        result.effects[1].category = "sub_drop"
+        config = self.config.model_copy(update={"provider": "elevenlabs", "max_requests": 1,
+                                               "sfx_cache_dir": Path(tempfile.mkdtemp())})
+        self.addCleanup(__import__('shutil').rmtree, config.sfx_cache_dir)
         with self.assertRaisesRegex(PipelineError, "exceeding"):
             _gate(config, self.sheet, result)
         config.provider, config.max_requests = "google_flow", 30

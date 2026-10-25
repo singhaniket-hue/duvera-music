@@ -1,5 +1,20 @@
 # Agent setup and operating protocol
 
+## Production media policy (cinema upgrade)
+
+Read docs/PRODUCTION_V2.md for the latest retake/evidence/audio/grade contracts.
+Retake decisions run on raw ASR before planning. Preserve complete sentences and
+rhyming slogans; do not treat any shared two-word prefix as permission to cut.
+All cuts/quotes/cues follow one TimelineMap. Final MP4 effects audibility is a hard
+gate, independent of nonzero stems. Verify with scripts/verify_documentary_delivery.py.
+
+Synthetic oscillator SFX and dummy-video demos are disabled. Use SFXAssetLibrary and
+real source footage. The documentary compositor is Chromium HTML/WebAnimations, with
+MediaPipe iris measurements and Lanczos4 zooms. Read docs/CINEMA_UPGRADE.md; it supersedes
+older Pillow/RAQM/procedural demo guidance below. Verify with
+`python scripts/run_real_checks.py` and `ruff check .`; set DUVERA_REAL_DEMO for the
+real-footage delivery check. Do not run legacy synthetic-video fixture generators.
+
 This is the Duvera Music Director Python CLI. Read README.md before changing workflows.
 
 ## Setup

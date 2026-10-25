@@ -40,6 +40,7 @@ class AssetStore:
         self.ledger_path = root / "generation_ledger.json"
         self.ledger = json.loads(self.ledger_path.read_text()) if self.ledger_path.exists() else {}
         self.procedural = {}
+        self.acoustic = {}
 
     def _save(self):
         temp = self.ledger_path.with_suffix(".tmp")
@@ -54,18 +55,11 @@ class AssetStore:
         if cue_id in self.assets[kind]:
             extract_audio(self.assets[kind][cue_id], output)
             return output
-        if kind == "sfx" and cue_id in self.procedural:
-            from ..procedural_sfx import synthesize
-            effect = self.procedural[cue_id]
-            fingerprint = hashlib.sha256(json.dumps(["procedural_v1", effect.category, effect.duration_sec, cue_id]).encode()).hexdigest()
-            entry = self.ledger.get(key)
-            if entry and entry.get("fingerprint") != fingerprint:
-                raise PipelineError("Procedural plan changed; use a fresh output directory")
-            if not (entry and entry.get("status") == "complete" and output.exists()):
-                synthesize(effect.category, max(0.5, effect.duration_sec), output, cue_id)
-                self.ledger[key] = {"fingerprint": fingerprint, "status": "complete", "seconds": 0,
-                                    "mode": "procedural", "category": effect.category}
-                self._save()
+        if kind == "sfx" and cue_id in self.acoustic:
+            from ..sfx_library import SFXAssetLibrary
+            source = SFXAssetLibrary(self.config.sfx_cache_dir).get(
+                self.acoustic[cue_id].category, allow_generation=self.config.allow_paid_generation)
+            extract_audio(source, output)
             return output
         if self.provider is None:
             raise PipelineError(f"Manifest is missing {kind} for {cue_id}")

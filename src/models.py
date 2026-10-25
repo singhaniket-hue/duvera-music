@@ -203,7 +203,10 @@ class RunConfig(Contract):
     documentary_edit_mode: Literal["off", "plan", "render"] = "off"
     documentary_plan_path: Path | None = None
     documentary_font_path: Path | None = None
+    retake_autocut: bool = True
+    studio_commentary_grade: bool = True
     procedural_sfx: bool = False
+    sfx_cache_dir: Path | None = None
 
     @model_validator(mode="after")
     def coherent(self):
@@ -211,7 +214,7 @@ class RunConfig(Contract):
             # Explicit fields/CLI overrides retain priority over preset defaults.
             defaults = {"dialogue_polish": True, "sfx_mode": "accents_only", "outro_music_return": False,
                         "documentary_edit_mode": "plan" if self.mode == "script_only" else "render",
-                        "procedural_sfx": True}
+                        "procedural_sfx": False}
             for name, value in defaults.items():
                 if name not in self.model_fields_set:
                     setattr(self, name, value)
@@ -221,6 +224,8 @@ class RunConfig(Contract):
                 self.archival_detection = "reference_voice"
         if not (self.video_path or self.script_path or self.transcript_path):
             raise ValueError("Supply video/audio, a script, or a timestamped transcript")
+        if self.procedural_sfx:
+            raise ValueError("Synthetic production SFX are disabled; use acoustic cached/provider assets")
         if self.mode != "script_only" and self.provider == "none":
             raise ValueError("Asset and video outputs require a provider")
         if self.mode == "final_video" and not self.video_path:

@@ -23,6 +23,8 @@ class EditEvent(Contract):
     eye_anchor: tuple[float, float] | None = None
     zoom_factor: float = Field(default=1.14, ge=1.1, le=1.25)
     required: bool = False
+    documentary_card_id: str | None = None
+    target_peak_dbfs: float | None = None
 
     @model_validator(mode="after")
     def validate_event(self):

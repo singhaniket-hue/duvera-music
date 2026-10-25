@@ -118,6 +118,12 @@ def render_effects(plan: PacingPlan, sheet: SpottingSheet, store, dialogue: Path
                 archives = sheet.model_copy(update={"silence_windows": [s for s in sheet.silence_windows if s.kind == "archival"]})
                 envelope *= silence_envelope(len(audio), start / SR, archives)
             audio *= envelope[:, None]
+            # Documentary accents keep their specified audible crest AFTER speech carving.
+            # Constant gain cannot relocate that crest; the independent dBTP ceiling still applies.
+            if config.documentary_edit_mode != "off" and item.tier == "accent" and item.level_mode == "sample_peak":
+                audio, final_level = level_effect(audio, item.target_lufs, item.peak_ceiling_db,
+                    level_mode="sample_peak", target_peak_dbfs=item.target_peak_dbfs)
+                level["post_carve_level"] = final_level
             if np.max(np.abs(audio), initial=0) < 1e-8:
                 records.append({"event_id": item.event_id, "status": "suppressed_by_silence", "passed": not item.required})
                 continue
@@ -203,7 +209,7 @@ def render_effects(plan: PacingPlan, sheet: SpottingSheet, store, dialogue: Path
         report = {"effects": records, "buses": bus_reports, "silence_policy": config.sfx_silence_policy,
             "combined_bus": combined,
             "passed": combined["passed"] and all(x["passed"] for x in records) and all(x["passed"] for x in bus_reports.values()),
-            "note": "Event/bus levels are pre-master. Final loudnorm changes all stems together."}
+            "note": "Event/bus levels are pre-master. Documentary mastering adds SFX after base loudnorm; see documentary_gain_staging.json and final_sfx_audibility.json."}
         (root / "sfx_qc.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
     finally:

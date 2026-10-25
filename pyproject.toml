@@ -16,9 +16,9 @@ browser = ["playwright>=1.48,<2"]
 timeline = ["opentimelineio>=0.17,<1"]
 dev = ["ruff>=0.8,<1"]
 cv = ["opencv-python-headless>=4.8,<4.12"]
-edit = ["opencv-python-headless>=4.8,<4.12", "Pillow>=10,<13", "fonttools>=4.50,<5", "regex>=2024.5"]
+edit = ["opencv-python-headless>=4.8,<4.12", "playwright>=1.48,<2", "mediapipe==0.10.21", "fonttools>=4.50,<5", "regex>=2024.5"]
 speaker = ["resemblyzer>=0.1.4,<0.2"]
-vocals = ["demucs==4.0.1", "torch>=2.2,<2.6", "torchaudio>=2.2,<2.6", "numpy>=1.24,<2"]
+vocals = ["demucs==4.0.1", "torch>=2.2,<2.6", "torchaudio>=2.2,<2.6", "numpy>=1.24,<2", "soundfile>=0.12,<1"]
 
 [project.scripts]
 duvera-music = "src.cli:main"

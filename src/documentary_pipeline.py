@@ -88,15 +88,14 @@ def rules_edit_plan(transcript, duration, config, audio, inserts):
         lowered = text.casefold()
         structural = any(x in lowered for x in ("aakhir", "kyun", "why ", "क्यों", "आखिर")) and "?" in text
         statistic = bool(re.search(r"(?:[₹$]\s*\d|\d[\d,.]*\s*(?:%|percent|crore|lakh|million|billion|करोड़|प्रतिशत)|\b(?:19|20)\d{2}\b)", text, re.I))
-        researcher = any(x in lowered for x in ("study", "researcher", "anthropologist", "professor", "अध्ययन", "शोध"))
         thesis = any(x in lowered for x in ("the truth", "dark side", "par asliyat", "lekin", "magar", "असलियत", "लेकिन"))
-        if structural or statistic or researcher:
+        if structural:
             kind = "black_chapter_card" if structural else "evidence_card" if statistic else "lower_third_citation"
             # Verbatim short excerpt; never fabricate an external source/date or verified citation.
             words = text.split()
             number = next((i for i, word in enumerate(words) if re.search(r"\d", word)), 0)
             headline = " ".join(words[max(0, number - 1):max(0, number - 1) + 6]).strip()
-            source = None if structural else "Narration excerpt"
+            source = None
             length = reading_hold(" ".join(x for x in (headline, source) if x)) + 0.3 + 1 / 24
             start = segment.start
             if start >= last_graphic_end + 0.1 and start + length <= duration:
@@ -121,7 +120,7 @@ def rules_edit_plan(transcript, duration, config, audio, inserts):
     trims = [p for p in trims if not any(e.is_graphic and p.raw_start_sec < e.end_sec and p.raw_end_sec > e.start_sec for e in visuals)]
     baseline = DocumentaryEditPlan(source_duration_sec=duration, visual_events=sorted(visuals, key=lambda e: e.start_sec),
         pause_trims=trims, music_sheet=rules_plan(transcript, duration, config), warnings=warnings + [
-            "Automatic cards are narration excerpts, not verified documentary sources; review text and timing",
+            "Evidence cards require a reviewed publisher source; generic narration cards are never generated",
             "Automatic eye crops execute only with actual eye geometry or a supplied reviewed anchor"])
     return baseline, decisions
 
@@ -179,7 +178,7 @@ def plan_edl(transcript, duration, config, audio, inserts):
     return result
 
 
-def build_time_map(plan, transcript, audio, inserts, source):
+def build_time_map(plan, transcript, audio, inserts, source, retake_cuts=()):
     rate = Fraction(source["rate"])
     fps, frames = float(rate), source["frames"]
     cuts, decisions = [], []
@@ -208,7 +207,21 @@ def build_time_map(plan, transcript, audio, inserts, source):
         if not quiet:
             raise PipelineError("Pause trim contains audible activity; retain it or review a quieter interval")
         cuts.append((first, last))
+    for cut in retake_cuts:
+        first=max(0,round(cut['start_sec']*fps))
+        last=min(frames,round(cut['end_sec']*fps))
+        if last>first:
+            cuts.append((first,last))
+            decisions.append({**cut,'source_start_frame':first,'source_end_frame':last,
+                              'accepted':True,'authority':'V2 source ASR retake/gap detector'})
     cuts.sort()
+    merged=[]
+    for a,b in cuts:
+        if merged and a<=merged[-1][1]:
+            merged[-1]=(merged[-1][0],max(b,merged[-1][1]))
+        else:
+            merged.append((a,b))
+    cuts=merged
     if any(b[0] < a[1] for a, b in zip(cuts, cuts[1:])):
         raise PipelineError("Frame-snapped cuts overlap")
     keep, cursor, output = [], 0, 0
@@ -244,8 +257,8 @@ def edit_audio(audio, mapping, bridge=True):
                 continue
             left = audio[raw_out - half:raw_out + half]
             right = audio[raw_in - half:raw_in + half]
-            theta = np.linspace(0, np.pi / 2, 2 * half)
-            result[join - half:join + half] = left * np.cos(theta)[:, None] + right * np.sin(theta)[:, None]
+            phase = np.linspace(0, 1, 2 * half)
+            result[join - half:join + half] = left * np.sqrt(1-phase)[:, None] + right * np.sqrt(phase)[:, None]
     if np.max(abs(result), initial=0) >= 1:
         raise PipelineError("Room-tone bridge would clip; source/edit needs review")
     return result, {"crossfade_ms": 20 if bridge else 0, "joins": max(0, len(joins) - 1),
@@ -253,8 +266,18 @@ def edit_audio(audio, mapping, bridge=True):
 
 
 def remap_transcript(transcript, mapping):
-    segments = [Segment(start=mapping.time(s.start), end=mapping.time(s.end), text=s.text)
-                for s in transcript.segments if mapping.time(s.end) > mapping.time(s.start)]
+    segments=[]
+    for s in transcript.segments:
+        if mapping.time(s.end)<=mapping.time(s.start):
+            continue
+        retained=[w.word.strip() for w in transcript.words if s.start<=w.start<s.end
+                  and mapping.time(w.end)>mapping.time(w.start)]
+        # Once a span was cut, reconstruct its text from surviving raw word tokens;
+        # never leave deleted false starts in the downstream planner's transcript.
+        cut=abs((mapping.time(s.end)-mapping.time(s.start))-(s.end-s.start))>.02
+        text=' '.join(retained) if cut and transcript.words else s.text
+        if text.strip():
+            segments.append(Segment(start=mapping.time(s.start),end=mapping.time(s.end),text=text))
     words = [Word(start=mapping.time(w.start), end=mapping.time(w.end), word=w.word)
              for w in transcript.words if mapping.time(w.end) > mapping.time(w.start)]
     return Transcript(segments=segments, words=words, timing_source=transcript.timing_source)
@@ -285,7 +308,10 @@ def remap_visuals(plan, mapping):
         data = event.model_dump()
         data.update(start_sec=math.ceil(mapping.time(event.start_sec) * mapping.fps - 1e-6) / mapping.fps,
                     end_sec=min(mapping.duration, math.ceil(mapping.time(event.end_sec) * mapping.fps - 1e-6) / mapping.fps))
-        if event.is_graphic:
+        for line in data.get('quote_lines',[]):
+            line['start_sec']=mapping.time(line['start_sec'])
+            line['word_times']=[mapping.time(t) for t in line['word_times']]
+        if event.is_graphic and event.edit_type!='slogan_cards':
             needed = reading_hold(event.visible_text) + 0.3
             data["end_sec"] = max(data["end_sec"], math.ceil((data["start_sec"] + needed) * mapping.fps - 1e-6) / mapping.fps)
             if data["end_sec"] > mapping.duration + 1e-6:
@@ -301,13 +327,25 @@ def effects_and_silence(visuals):
     kinds = {"sub_drop": "chapter_transition", "paper_slide_pop": "headline", "ui_data_tick": "data_reveal", "whoosh_soft": "whip"}
     for event in visuals:
         key = "edl_" + (event.event_id if len(event.event_id) <= 70 else hashlib.sha256(event.event_id.encode()).hexdigest()[:24])
-        if event.sfx_trigger != "none":
-            effects.append(EditEvent(event_id=key, time_sec=event.start_sec, kind=kinds[event.sfx_trigger],
+        bundle={'lower_third_citation':[('ui_data_tick',0,-7)],
+                'black_chapter_card':[('sub_drop',0,-2.5),('whoosh_soft',0,-6)],
+                'slogan_cards':[('sub_drop',0,-2.5),('whoosh_soft',0,-6)],
+                'evidence_card':[('paper_slide_pop',0,-5),('whoosh_soft',.3,-8)],
+                'document_card':[('paper_slide_pop',0,-5),('whoosh_soft',.3,-8)],
+                'thesis_creep':[('sub_drop',0,-10)]}.get(event.edit_type,[])
+        accent_ids=[]
+        for index,(name,offset,peak) in enumerate(bundle):
+            fx_id=key if index==0 else key+'_layer'+str(index)
+            accent_ids.append(fx_id)
+            effects.append(EditEvent(event_id=fx_id, time_sec=event.start_sec+offset, kind=kinds[name],
                 confidence=1, intensity=0.95, semantic_salience=0.95, required=event.required,
+                documentary_card_id=event.event_id,target_peak_dbfs=peak,
                 evidence="Rendered documentary visual event: " + event.edit_type))
-        if event.edit_type == "black_chapter_card":
+        if event.edit_type in {"black_chapter_card","slogan_cards","thesis_creep"}:
             silence.append(SilenceWindow(start_sec=event.start_sec, end_sec=event.end_sec,
-                reason="Rendered black chapter/question card; original dialogue continues", accent_event_ids=[key]))
+                fade_sec=.15 if event.edit_type=='thesis_creep' else .2,
+                reason="Documentary quote/thesis pivot; original dialogue continues", accent_event_ids=accent_ids))
+    # The music decays entirely BEFORE a chapter card, leaving its speech alone.
     return EventGraph(events=effects), silence
 
 
@@ -335,17 +373,33 @@ def prepare_documentary(config, transcript, duration, dialogue, inserts, plan_on
         return None
     root = config.output_dir
     audio = read_audio(dialogue)[0] if dialogue else None
+    retake_cuts=[]
+    if config.retake_autocut and audio is not None:
+        from .retake_cutter import detect_retakes
+        retake_cuts,retake_decisions=detect_retakes(transcript,audio,inserts)
+        save(root/'retake_analysis.json',{'clock':'source','cuts':retake_cuts,'gap_decisions':retake_decisions,
+            'asr_before_visual_or_music_planning':True,'crossfade_ms':20,'retained_pause_ms':180})
     edl = plan_edl(transcript, duration, config, audio, inserts)
     if config.video_path:
         source = validate_render_source(config.video_path)
     else:
         source = {"rate": str(config.fps), "frames": round(duration * config.fps), "width": 0, "height": 0}
-    mapping, trim_decisions = build_time_map(edl, transcript, audio, inserts, source)
+    mapping, trim_decisions = build_time_map(edl, transcript, audio, inserts, source, retake_cuts)
     # All secondary events use this single affine piecewise map.
     mapped = remap_transcript(transcript, mapping)
     mapped_inserts = [ArchivalInsertWindow(**{**w.model_dump(), "start_sec": mapping.time(w.start_sec),
                        "end_sec": mapping.time(w.end_sec)}) for w in inserts]
     visuals = remap_visuals(edl, mapping)
+    from .evidence_fetcher import EvidenceFetcher, verify_headline_excerpt
+    for event in visuals:
+        if event.edit_type=='evidence_card':
+            if not event.source_url:
+                raise PipelineError('Evidence cards require an actual publisher source URL')
+            evidence=EvidenceFetcher(root/'evidence').fetch(event.source_url)
+            verify_headline_excerpt(event.headline_text,evidence['publisher_headline'])
+            event.evidence_image_path=evidence['image_path']
+            event.evidence_image_sha256=evidence['image_sha256']
+            event.publisher=event.publisher or evidence['publisher']
     fx, silence = effects_and_silence(visuals)
     working = config.model_copy(deep=True)
     working.visual_pacing, working.pacing_detect_video, working.analyze_visuals = "off", False, False
@@ -364,6 +418,9 @@ def prepare_documentary(config, transcript, duration, dialogue, inserts, plan_on
     sheet = remap_sheet(source_sheet, mapping) if source_sheet else None
     if sheet:
         sheet.silence_windows += silence
+        for cue in sheet.cues:
+            if any(abs(cue.end_sec - s.start_sec) < .002 for s in silence):
+                cue.exit_type, cue.exit_tail_ms, cue.exit_anchor_before_sec = "transient_stop", 150 if any(e.edit_type=='thesis_creep' and abs(e.start_sec-cue.end_sec)<.002 for e in visuals) else 200, .5
     if config.event_graph_path:
         supplied = EventGraph.model_validate_json(config.event_graph_path.read_text(encoding="utf-8"))
         fx.events.extend(remap_event_graph(supplied, mapping).events)
@@ -406,6 +463,23 @@ def prepare_documentary(config, transcript, duration, dialogue, inserts, plan_on
         from .dsp import silence_envelope
         muted_sheet = protect_archival(sheet, mapped_inserts)
         music *= silence_envelope(len(music), 0, muted_sheet)[:, None]
+        # Recorded-music early reflections decay before the exact thesis silence boundary.
+        # This is convolution/delay of the actual bed, never a synthesized drone/tone.
+        for event in visuals:
+            if event.edit_type!='thesis_creep':
+                continue
+            end=round(event.start_sec*SR)
+            length=round(.15*SR)
+            start=max(0,end-length)
+            dry=music[start:end].copy()
+            tail=np.zeros_like(dry)
+            for delay,gain in ((.013,.22),(.023,.16),(.037,.11),(.053,.07)):
+                lag=round(delay*SR)
+                if lag<len(tail):
+                    tail[lag:]+=dry[:-lag]*gain
+            decay=np.linspace(1,0,len(tail),dtype=np.float32)**2
+            music[start:end]+=tail*decay[:,None]
+            music[end:round(event.end_sec*SR)]=0
         working.locked_music_path = root / "locked_music_edited.wav"
         write_audio(working.locked_music_path, music)
         working.locked_music_sha256 = sha256(working.locked_music_path)
@@ -421,7 +495,10 @@ def prepare_documentary(config, transcript, duration, dialogue, inserts, plan_on
         from .video_editor_engine import render_documentary_video_track
         working.video_path = root / "documentary_video.mp4"
         report["visual_render"] = render_documentary_video_track(config.video_path, working.video_path, visuals,
-                                                               mapping, source, config.documentary_font_path)
+                                                               mapping, source, config.documentary_font_path,
+                                                               word_timestamps=[w.model_dump() for w in mapped.words],
+                                                               cache_root=root / "html_overlays",
+                                                               studio_grade=config.studio_commentary_grade)
     save(root / "documentary_render_qc.json", report)
     save(root / "timeline_map.json", mapping.model_dump())
     save(root / "source_transcript.json", transcript.model_dump())

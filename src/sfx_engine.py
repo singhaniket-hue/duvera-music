@@ -40,7 +40,8 @@ def shape(audio: np.ndarray, duration_sec: float, category: str) -> np.ndarray:
     fade_in = min(round(0.003 * SR), len(audio) // 4)
     fade_out = min(round(0.02 * SR), len(audio) // 3)
     if fade_in:
-        audio[:fade_in] *= np.sin(np.linspace(0, np.pi / 2, fade_in))[:, None] ** 2
+        ramp = np.linspace(0, 1, fade_in)
+        audio[:fade_in] *= (ramp * ramp * (3 - 2 * ramp))[:, None]
     if fade_out:
         audio[-fade_out:] *= np.cos(np.linspace(0, np.pi / 2, fade_out))[:, None] ** 2
     crest_sample(audio)  # Fail on silent, failed synthesis instead of reporting a fictional peak.

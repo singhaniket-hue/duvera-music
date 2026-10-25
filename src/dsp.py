@@ -303,10 +303,15 @@ def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig
            "-map", "[ref]", "-ar", SR, "-c:a", "pcm_f32le", reference)
     from .mix_qc import verify_sfx_routing
     routing = verify_sfx_routing(premix, reference, sfx)
-    reference.unlink(missing_ok=True)
     if not routing["passed"]:
         raise PipelineError("SFX premix routing failed: waveform was omitted or attenuated")
-    normalize(premix, master, config.target_lufs, config.true_peak_db)
+    staging=None
+    if config.documentary_edit_mode=='render':
+        from .documentary_audio import mux_final_documentary_master
+        master,staging=mux_final_documentary_master(dialogue,music,sfx,root,config)
+    else:
+        normalize(premix, master, config.target_lufs, config.true_peak_db)
+    reference.unlink(missing_ok=True)
     master_qc = loudness(master)
     video = root / f"final_video_{root.name}.mp4"
     # Re-encode for predictable MP4 compatibility, preserving image dimensions and frame rate.
@@ -314,12 +319,19 @@ def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig
     if config.visual_pacing == "render" and visual_source and pacing and pacing.visuals:
         from .visual_pacing import ffmpeg_filter
         video_filter = ffmpeg_filter(pacing, visual_source)
+    # The documentary compositor already validated/encoded this H.264 picture.
+    # Copy it losslessly when no later visual filter is requested.
+    picture_args=(["-c:v","copy"] if config.documentary_edit_mode=='render' and config.visual_pacing=='off' else
+                  ["-c:v","libx264","-preset","medium","-crf","18","-pix_fmt","yuv420p","-vf",video_filter])
     ffmpeg("-i", config.video_path, "-i", master, "-map", "0:v:0", "-map", "1:a:0",
-           "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
-           "-vf", video_filter, "-c:a", "aac", "-b:a", "192k",
+           *picture_args, "-c:a", "aac", "-b:a", "192k",
            "-ar", SR, "-movflags", "+faststart", "-shortest", video)
     # Measure the actual encoded output: AAC can change true peaks.
     final_qc = loudness(video)
+    audibility=None
+    if config.documentary_edit_mode=='render' and pacing and pacing.effects:
+        from .documentary_audio import verify_final_sfx_audibility
+        audibility=verify_final_sfx_audibility(video,root,pacing)
     actual_i, actual_tp = final_qc.get("input_i"), final_qc.get("input_tp")
     passed = (actual_i is not None and actual_tp is not None and
               abs(actual_i - config.target_lufs) <= 1 and actual_tp <= -1)
@@ -335,6 +347,7 @@ def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig
     premix.unlink(missing_ok=True)
     return {"master": master.name, "video": video.name, "master_measurement": master_qc,
             "sfx_routing": routing,
+            "documentary_gain_staging":staging,"final_sfx_audibility":audibility,
             "visual_pacing": "documentary_baked" if config.documentary_edit_mode == "render" else "rendered" if visual_source and pacing and pacing.visuals else "source_picture",
             "visual_qc": visual_qc,
             "encoded_measurement": final_qc, "passed": passed,
