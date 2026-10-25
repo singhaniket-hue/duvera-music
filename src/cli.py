@@ -14,6 +14,7 @@ from .pipeline import execute
 from .preflight import check_environment
 
 PATHS = {"video_path", "script_path", "transcript_path", "spotting_sheet_path", "event_graph_path", "locked_music_path", "output_dir",
+         "archival_windows_path", "narrator_reference_path",
          "local_assets", "google_flow_assets", "elevenlabs_assets", "google_flow_browser_config", "chrome_profile_dir"}
 
 
@@ -27,6 +28,7 @@ def parser():
                        ("spotting-sheet", "spotting_sheet_path"), ("output-dir", "output_dir"),
                        ("event-graph", "event_graph_path"),
                        ("locked-music", "locked_music_path"),
+                       ("archival-windows", "archival_windows_path"), ("narrator-reference", "narrator_reference_path"),
                        ("local-assets", "local_assets"), ("google-flow-assets", "google_flow_assets"),
                        ("elevenlabs-assets", "elevenlabs_assets"), ("google-flow-browser-config", "google_flow_browser_config"),
                        ("chrome-profile-dir", "chrome_profile_dir")]:
@@ -35,6 +37,13 @@ def parser():
     p.add_argument("--lang", dest="language", choices=["english", "hinglish", "hindi"])
     p.add_argument("--provider", choices=["none", "local", "elevenlabs", "google_flow", "both_compare"])
     p.add_argument("--planner", choices=["rules", "llm"])
+    p.add_argument("--preset", choices=["default", "social_commentary"])
+    p.add_argument("--archival-detection", choices=["off", "reference_voice"])
+    p.add_argument("--speaker-mismatch-threshold", type=float)
+    p.add_argument("--speaker-return-threshold", type=float)
+    vocal_chain = p.add_mutually_exclusive_group()
+    vocal_chain.add_argument("--dialogue-polish", action="store_true", default=None)
+    vocal_chain.add_argument("--no-dialogue-polish", dest="dialogue_polish", action="store_false", default=None)
     p.add_argument("--allow-paid-generation", action="store_true", default=None)
     for name in ("max-generated-seconds", "target-lufs", "true-peak-db", "cue-seconds", "estimated-wpm"):
         p.add_argument("--" + name, type=float)

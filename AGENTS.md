@@ -58,6 +58,12 @@ Keep sample-peak dBFS, active RMS dBFS, windowed LUFS and true-peak dBTP distinc
 Locked music means an existing timeline music-only PCM16 WAV plus its SHA-256, not a git
 commit seed or a mixed MP4/master. Recheck the vocal gate; never auto-strip a locked bed.
 Check music_continuity and sfx_routing in qc_report.json before calling a render complete.
+For --preset social_commentary read docs/SOCIAL_COMMENTARY.md. Reviewed archive ranges
+need no model; automatic reference-voice candidates require an explicit clean narrator
+sample and the speaker extra. Do not assume a cold open is the narrator or treat cosine
+similarity as verified identity. Preserve original insert samples and mute added music/SFX.
+Vocal EQ/compression is not dereverberation or fixed per-word LUFS. Chapter labels and
+question timing remain proposals; do not promise reference-video quality from fixtures.
 Visual rendering supports CFR only and never retimes source speech. Cut/pause suggestions
 are review notes, not automatic edits. Use a fresh output directory after changing a plan.
 

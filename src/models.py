@@ -57,6 +57,8 @@ class SilenceWindow(Contract):
     start_sec: float = Field(ge=0)
     end_sec: float = Field(gt=0)
     reason: str
+    kind: Literal["narrative", "archival"] = "narrative"
+    fade_sec: float = Field(default=0.03, ge=0, le=1)
 
     @model_validator(mode="after")
     def ordered(self):
@@ -83,6 +85,9 @@ class MusicCue(Contract):
     exit_tail_ms: float = Field(default=0, ge=0, le=500)
     exit_anchor_before_sec: float | None = Field(default=None, ge=0.15, le=1)
     reuse_music_from: str | None = Field(default=None, pattern=r"^cue_[0-9]{3}$")
+    chapter_id: str | None = None
+    chapter_title: str | None = None
+    generation_seconds: float | None = Field(default=None, ge=3, le=600)
 
     @model_validator(mode="after")
     def ordered(self):
@@ -138,6 +143,7 @@ class SpottingSheet(Contract):
 
 
 class RunConfig(Contract):
+    preset: Literal["default", "social_commentary"] = "default"
     video_path: Path | None = None
     script_path: Path | None = None
     transcript_path: Path | None = None
@@ -187,9 +193,22 @@ class RunConfig(Contract):
     locked_music_path: Path | None = None
     locked_music_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     max_music_gap_sec: float = Field(default=0.75, ge=0.1, le=5)
+    dialogue_polish: bool = False
+    archival_windows_path: Path | None = None
+    narrator_reference_path: Path | None = None
+    archival_detection: Literal["off", "reference_voice"] = "off"
+    speaker_mismatch_threshold: float = Field(default=0.6, ge=0.1, le=0.9)
+    speaker_return_threshold: float = Field(default=0.75, ge=0.2, le=0.99)
 
     @model_validator(mode="after")
     def coherent(self):
+        if self.preset == "social_commentary":
+            # Explicit fields/CLI overrides retain priority over preset defaults.
+            for name, value in {"dialogue_polish": True, "sfx_mode": "accents_only", "outro_music_return": False}.items():
+                if name not in self.model_fields_set:
+                    setattr(self, name, value)
+            if self.narrator_reference_path and "archival_detection" not in self.model_fields_set:
+                self.archival_detection = "reference_voice"
         if not (self.video_path or self.script_path or self.transcript_path):
             raise ValueError("Supply video/audio, a script, or a timestamped transcript")
         if self.mode != "script_only" and self.provider == "none":
@@ -202,4 +221,8 @@ class RunConfig(Contract):
             raise ValueError("visual_pacing=render requires final_video and a video")
         if bool(self.locked_music_path) != bool(self.locked_music_sha256):
             raise ValueError("Locked music requires both a WAV path and its SHA-256")
+        if self.archival_detection == "reference_voice" and not (self.narrator_reference_path and self.video_path):
+            raise ValueError("Reference-voice archival detection needs source media and an explicit clean narrator reference")
+        if self.speaker_mismatch_threshold >= self.speaker_return_threshold:
+            raise ValueError("Speaker return threshold must exceed mismatch threshold")
         return self

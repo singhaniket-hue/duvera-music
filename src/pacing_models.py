@@ -13,7 +13,7 @@ class EditEvent(Contract):
     time_sec: float = Field(ge=0)
     end_sec: float | None = Field(default=None, gt=0)
     kind: Literal["cut", "black_card", "text_enter", "whip", "zoom", "impact", "ui_tick",
-                  "shutter", "location_change", "foley", "punch_in"]
+                  "shutter", "location_change", "foley", "punch_in", "headline", "data_reveal", "chapter_transition", "riser"]
     confidence: float = Field(ge=0, le=1)
     intensity: float = Field(default=0, ge=0, le=1)
     semantic_salience: float = Field(default=0, ge=0, le=1)

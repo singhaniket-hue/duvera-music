@@ -26,6 +26,9 @@ from .visuals import analyze_video
 from .vocals import VocalGuard
 from .visual_pacing import validate_render_source
 from .music_continuity import build_locked_stems, music_gap_qc, sha256, validate_locked_music
+from .archival import ArchivalWindows, archival_windows, protect_archival
+from .documentary import chapter_events, chapter_summary
+from .dialogue_polish import polish_dialogue
 
 
 def save_json(path: Path, value):
@@ -44,7 +47,7 @@ def _fingerprint(config: RunConfig) -> str:
                     raise PipelineError(f"Input file not found: {value}")
                 stat = value.stat()
                 files[name] = [str(value.resolve()), stat.st_size, stat.st_mtime_ns]
-    return hashlib.sha256(json.dumps(["sfx-audibility-v2", data, files], sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(["commentary-v3", data, files], sort_keys=True).encode()).hexdigest()
 
 
 def _branches(config: RunConfig):
@@ -114,6 +117,22 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
     if config.video_path or config.mode != "script_only":
         require_ffmpeg()
     transcript, duration, dialogue = ingest(config)
+    archive_path = root / "archival_analysis.json"
+    if archive_path.exists():
+        archive_data = json.loads(archive_path.read_text(encoding="utf-8"))
+        inserts = ArchivalWindows.model_validate({"windows": archive_data["windows"]}).windows
+    else:
+        inserts, speaker_scores = archival_windows(config, dialogue, duration, root)
+        save_json(archive_path, {"windows": [w.model_dump() for w in inserts], "scores": speaker_scores,
+            "mode": config.archival_detection, "resolution_sec": 0.5 if speaker_scores else None,
+            "coverage": "reviewed_and_or_reference_candidates" if inserts or config.archival_detection != "off" else "disabled_no_insert_windows",
+            "note": "Reference-voice mismatches are candidates, not speaker identity or proof of archival origin"})
+    polish_qc = {"status": "disabled"}
+    if config.dialogue_polish and dialogue:
+        dialogue, polish_qc = polish_dialogue(dialogue, inserts, root)
+    elif config.dialogue_polish:
+        polish_qc = {"status": "skipped_no_recorded_audio"}
+    save_json(root / "dialogue_polish_qc.json", polish_qc)
     visuals = analyze_video(config.video_path, duration, config) if config.video_path else []
     save_json(root / "visual_analysis.json", {
         "events": [v.model_dump() for v in visuals],
@@ -140,6 +159,10 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
         sheet = plan(transcript, duration, config, dialogue_lufs, pulse, visuals)
     if abs(sheet.video_duration_sec - duration) > 0.001 or sheet.timing_source != transcript.timing_source:
         raise PipelineError("Cached spotting sheet no longer matches media timing; use a new output directory")
+    sheet = protect_archival(sheet, inserts)
+    if config.preset == "social_commentary" and not config.archival_windows_path and config.archival_detection == "off":
+        sheet.warnings = list(dict.fromkeys(sheet.warnings + [
+            "Archival protection has no windows/reference: supply --archival-windows or --narrator-reference for inserts."]))
     (root / "spotting_sheet.json").write_text(sheet.model_dump_json(indent=2), encoding="utf-8")
     sheet_hash = hashlib.sha256(sheet.model_dump_json().encode()).hexdigest()
     pacing_sheet_hash = root / "pacing_sheet_hash.txt"
@@ -150,6 +173,9 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
         pacing = PacingPlan.model_validate_json((root / "pacing_plan.json").read_text(encoding="utf-8"))
     else:
         graph = EventGraph.model_validate_json(config.event_graph_path.read_text(encoding="utf-8")) if config.event_graph_path else EventGraph()
+        if config.preset == "social_commentary":
+            supplied = {e.event_id for e in graph.events}
+            graph = EventGraph(events=graph.events + [e for e in chapter_events(sheet) if e.event_id not in supplied])
         enabled = config.sfx_mode != "none" or config.visual_pacing != "off"
         if enabled and config.pacing_detect_video and config.video_path:
             from .cv_detectors import detect_video
@@ -164,6 +190,8 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
     visual_source = validate_render_source(config.video_path) if config.visual_pacing == "render" else None
     save_json(root / "event_graph.json", graph.model_dump(mode="json"))
     save_json(root / "pacing_plan.json", pacing.model_dump(mode="json"))
+    save_json(root / "chapter_plan.json", {"preset": config.preset, "chapters": chapter_summary(sheet),
+        "note": "Distinct chapter sources; semantic labels and duration-grid fallbacks need editorial review"})
     pacing_sheet_hash.write_text(sheet_hash + "\n")
     export_script(sheet, transcript, config, root)
     jobs = [{"cue_id": c.cue_id, "kind": kind, "duration_seconds": seconds, "prompt": prompt,
@@ -185,6 +213,8 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
                 "sfx_count": len(pacing.effects), "blocking_issues": pacing.blocking_issues}
     if pacing.blocking_issues:
         raise PipelineError("; ".join(pacing.blocking_issues))
+    if not polish_qc.get("passed", True):
+        raise PipelineError("Narration polish loudness/peak QC failed; inspect dialogue_polish_qc.json before generation")
     if config.locked_music_path:
         validate_locked_music(config, duration, sheet)
     planned = _gate(config, sheet, pacing)
@@ -230,6 +260,7 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
             export_timeline(sheet, config, branch, records, dialogue, pacing)
             qc = {"provider": name, "source": planned[name], "cues": records, "mastering": None,
                   "vocal_policy": config.vocal_policy, "sfx_pacing": sfx_qc, "music_continuity": continuity,
+                  "preset": config.preset, "dialogue_polish": polish_qc, "archival_windows": [w.model_dump() for w in inserts],
                   "locked_music_sha256": config.locked_music_sha256,
                   "locked_music_vocal_check": guard.reports.get("locked/music"),
                   "vocal_checks": {key.split("/", 1)[1]: value for key, value in guard.reports.items()

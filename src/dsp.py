@@ -90,13 +90,13 @@ def silence_envelope(count: int, offset: float, sheet: SpottingSheet) -> np.ndar
     gain = np.ones(count, dtype=np.float32)
     for silence in sheet.silence_windows:
         # Fade OUT before the protected line, fade IN after it; silence itself is exactly zero.
-        a, b, fade = silence.start_sec, silence.end_sec, 0.03
+        a, b, fade = silence.start_sec, silence.end_sec, silence.fade_sec
         local = np.ones(count, dtype=np.float32)
         down = (t >= a - fade) & (t < a)
         up = (t > b) & (t <= b + fade)
-        local[down] = (a - t[down]) / fade
+        local[down] = (a - t[down]) / max(fade, 1e-9)
         local[(t >= a) & (t <= b)] = 0
-        local[up] = (t[up] - b) / fade
+        local[up] = (t[up] - b) / max(fade, 1e-9)
         gain = np.minimum(gain, local)
     return gain
 
@@ -294,8 +294,9 @@ def build_stems(sheet: SpottingSheet, store, dialogue: Path | None, root: Path,
 def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig, pacing=None, visual_source=None) -> dict:
     premix, master = root / "premix.wav", root / "master.wav"
     reference = root / "premix_without_sfx.wav"
+    voice_filter = "anull" if config.dialogue_polish else "highpass=f=65:p=2"
     ffmpeg("-i", dialogue, "-i", music, "-i", sfx,
-           "-filter_complex", "[0:a]highpass=f=65:p=2,asplit=2[v][vr];[1:a]asplit=2[b][br];"
+           "-filter_complex", f"[0:a]{voice_filter},asplit=2[v][vr];[1:a]asplit=2[b][br];"
            "[v][b][2:a]amix=inputs=3:duration=first:normalize=0[m];"
            "[vr][br]amix=inputs=2:duration=first:normalize=0[ref]",
            "-map", "[m]", "-ar", SR, "-c:a", "pcm_f32le", premix,

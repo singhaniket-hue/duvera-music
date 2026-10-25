@@ -234,6 +234,25 @@ also verifies that the actual premix contains the SFX waveform at unity gain.
 ambience, retaining independent true-peak ceilings. It is an explicit alternative to the
 original research loudness profile, not a new definition of LUFS or true peak.
 
+## Social commentary preset
+
+--preset social_commentary enables a narration chain, a documentary accent palette, and
+chapter-based music variation. Long scripts use 90–150 second editorial chapters; an
+11:18 transcript receives five chapter stems in the rules preset. Chapter moods/titles
+are proposals, and --planner llm can refine them through your explicitly configured endpoint.
+Chapter splits reuse their chapter music instead of requesting a fresh song per sentence.
+
+Supply reviewed third-party insert ranges with --archival-windows, or explicitly enable
+local reference-voice candidates with --narrator-reference and the optional speaker extra.
+No reference/ranges means archival detection is disabled and reported. An unfamiliar
+voice does not establish that a clip is archival. Original insert audio bypasses the
+narration chain, and added music/SFX mute across its protected interval.
+
+    python -m src.cli --preset social_commentary --video raw.mp4 --transcript transcript.json --archival-windows archive-windows.json --event-graph evidence-events.json --mode script_only --output-dir agent_output/commentary_plan
+
+Read [docs/SOCIAL_COMMENTARY.md](docs/SOCIAL_COMMENTARY.md) for the full setup, JSON
+contracts, vocal-chain measurements and current model/editorial limits.
+
 ## ElevenLabs
 
 Music uses POST /v1/music with music_v2 and force_instrumental=true.

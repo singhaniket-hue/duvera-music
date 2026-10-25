@@ -5,6 +5,10 @@ from .models import RunConfig, SpottingSheet, Transcript
 from .pacing_models import EventGraph, PacingPlan, SFXInstruction, VisualInstruction
 
 PRESETS = {
+    "headline": ("paper_slide", 0.22, -21, -7, 8, "Soft paper slide and muted low-mid pop, no voice, no music"),
+    "data_reveal": ("ui_tick", 0.06, -21, -7, 6, "Restrained mechanical evidence counter tick, no voice, no music"),
+    "chapter_transition": ("sub_drop", 0.55, -18, -7, 10, "Restrained dark 45–80Hz documentary sub, no voice, no music"),
+    "riser": ("riser", 0.45, -20, -7, 0, "Soft non-tonal documentary transition riser, no voice, no music"),
     "black_card": ("sub_drop", 0.55, -18, -7, 10,
                    "Restrained warm 35–80 Hz sub thud, no midrange click, no voice, no music"),
     "text_enter": ("text_pop", 0.08, -21, -7, 6,
@@ -23,6 +27,10 @@ def protected(time: float, sheet: SpottingSheet) -> bool:
     return any(s.start_sec <= time < s.end_sec for s in sheet.silence_windows)
 
 
+def archival_protected(time: float, sheet: SpottingSheet) -> bool:
+    return any(s.kind == "archival" and s.start_sec <= time < s.end_sec for s in sheet.silence_windows)
+
+
 def schedule(graph: EventGraph, sheet: SpottingSheet, transcript: Transcript, config: RunConfig) -> PacingPlan:
     result = PacingPlan()
     duration = sheet.video_duration_sec
@@ -33,7 +41,8 @@ def schedule(graph: EventGraph, sheet: SpottingSheet, transcript: Transcript, co
         if event.time_sec >= duration or (event.end_sec is not None and event.end_sec > duration + 0.001):
             raise ValueError(f"Event {event.event_id} exceeds source duration")
         dialogue_active = any(s.start <= event.time_sec < s.end for s in transcript.segments)
-        structural = event.kind in {"black_card", "text_enter", "whip", "zoom", "ui_tick", "shutter"}
+        structural = event.kind in {"black_card", "text_enter", "whip", "zoom", "ui_tick", "shutter",
+                                    "headline", "data_reveal", "chapter_transition", "riser"}
         score = (0.30 * event.semantic_salience + 0.25 * event.intensity + 0.20 * event.confidence
                  + 0.15 * structural + 0.10 * (not dialogue_active))
         decision = {"event_id": event.event_id, "time_sec": event.time_sec,
@@ -59,6 +68,9 @@ def schedule(graph: EventGraph, sheet: SpottingSheet, transcript: Transcript, co
             continue
         if event.confidence < 0.7:
             decision["reason"] = "low confidence"
+            continue
+        if config.preset == "social_commentary" and event.kind in {"location_change", "foley"}:
+            decision["reason"] = "documentary palette excludes invented environmental ambience and object Foley"
             continue
         if event.kind == "location_change":
             if config.sfx_mode != "full_3_tier":
@@ -96,6 +108,9 @@ def schedule(graph: EventGraph, sheet: SpottingSheet, transcript: Transcript, co
             continue
         if event.kind not in PRESETS:
             decision["reason"] = "ordinary cut has no independent accent evidence"
+            continue
+        if archival_protected(event.time_sec, sheet):
+            decision["reason"] = "archival audio owns the mix; no added editorial accent"
             continue
         if event.time_sec + 0.025 >= duration:
             decision["reason"] = "insufficient timeline for acoustic landmark"

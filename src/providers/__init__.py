@@ -93,7 +93,7 @@ def generation_jobs(sheet: SpottingSheet, pacing=None, locked_music=False):
         if fully_silent(cue.start_sec, cue.end_sec, sheet.silence_windows):
             continue
         if not cue.reuse_music_from:
-            yield cue, "music", max(3, cue.end_sec - cue.start_sec), music_prompt(cue)
+            yield cue, "music", cue.generation_seconds or max(3, cue.end_sec - cue.start_sec), music_prompt(cue)
         if cue.bridge_sfx_prompt:
             yield cue, "sfx", max(0.5, min(2, cue.end_sec - cue.start_sec)), cue.bridge_sfx_prompt
     if pacing:

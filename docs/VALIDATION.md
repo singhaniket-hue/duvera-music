@@ -106,3 +106,22 @@ that the remote workflow has run.
   rejection, compact vertical text, and a controlled SFX transient surviving encoded AAC.
 - No live provider/model test or actual Render #5 is claimed. The mixed attachment cannot
   recover the isolated Render #3 bed or raw narration; those are needed for that render.
+
+## Social commentary preset — 25 October 2026
+
+- Added --preset social_commentary with an optional FFmpeg narration chain, a documentary
+  accent palette, long-form chapter variation, rhetorical/closing holds and archival protection.
+- Real FFmpeg tests verify the narration target and unchanged original PCM samples inside
+  reviewed archival windows. An end-to-end controlled final video verifies original insert
+  preservation, zero added music there, evidence accents and SFX routing.
+- An 11:18 transcript fixture receives five 90–150 second chapters, distinct palettes and
+  one normally 60-second generated-source request per chapter, reused across narrative splits.
+- Optional LLM chapter instructions are checked using a controlled endpoint response.
+  No live LLM/editorial quality validation was performed.
+- Optional Resemblyzer reference matching is exercised with controlled embeddings/scores
+  and dependency-failure tests. Real model installation, weights loading and speaker/archival
+  accuracy were not tested. Cosine mismatch remains a candidate signal, not identity proof.
+- The referenced YouTube video's full content could not be independently retrieved; the
+  preset implements the supplied brief and does not claim matching that creator's exact mix.
+- The suite contains 75 tests, including the previous 65 regression tests and rejection of
+  an LLM collapsing all chapters into one long loop. Local tests and Ruff checks passed.
