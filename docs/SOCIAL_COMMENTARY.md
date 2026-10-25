@@ -6,7 +6,7 @@ full audiovisual content could not be independently retrieved during this build.
 
 ```powershell
 git pull
-python scripts/bootstrap.py --extras cv,vocals
+python scripts/bootstrap.py --extras edit,vocals
 .venv\Scripts\python -m src.cli --preset social_commentary --video raw.mp4 --transcript transcript.json --archival-windows archive-windows.json --event-graph evidence-events.json --mode script_only --output-dir commentary_plan
 ```
 
@@ -31,9 +31,11 @@ directory when inputs/provider choices change.
 
 Explicit --no-dialogue-polish and --sfx-mode none overrides retain priority over defaults.
 --outro-music-return is off by preset default, leaving the closing sentence solo.
-The existing research loudness SFX profile remains default; choose --sfx-mix-profile audible
-only when you want its stronger sample-peak/active-RMS policy. The breakfast-specific
-audible recipe is separate from this preset.
+The full picture editor now defaults to the audible peak/active-RMS SFX profile and local
+procedural editorial accents. Explicit profile/provider overrides retain priority.
+See [DOCUMENTARY_EDITOR.md](DOCUMENTARY_EDITOR.md) for picture cuts, eye anchors, all three
+graphic styles, shared-clock retiming and font requirements. --documentary-edit-mode off
+retains the previous audio-only preset and its original research profile by default.
 
 Compression and EQ cannot promise a studio recording, remove room echo, repair source
 clipping, or hold every word at −14 LUFS. The reported target is integrated narration
@@ -121,8 +123,8 @@ prompt requests chapter IDs, distinct palettes and rhetorical/closing holds, wit
 chapter quality; no live LLM call was tested here. Supplied --spotting-sheet decisions
 retain priority over automatic chapter planning.
 
-Automatic chapter changes can propose restrained sub accents, except in protected
-windows. Other evidence graphics need a reviewed event graph:
+In the audio-only preset, automatic chapter changes can propose restrained sub accents,
+except in protected windows. A reviewed event graph can describe existing evidence entrances:
 
 ```json
 {
@@ -150,7 +152,9 @@ windows. Other evidence graphics need a reviewed event graph:
 ```
 
 The times are contract examples inspired by the brief, not verified source annotations.
-There is no new OCR/VLM headline/data detector. If a short commentary plan has no
+The picture editor instead renders its own source-clock visual events and derives their
+SFX events. Rules use narration excerpts, not verified article screenshots or OCR/VLM.
+If a short commentary plan has no
 evidenced effects, the SFX empty-plan gate blocks asset rendering; supply actual events
 or explicitly use --sfx-mode none. Do not fabricate graphics to satisfy a detector.
 

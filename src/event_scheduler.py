@@ -31,6 +31,11 @@ def archival_protected(time: float, sheet: SpottingSheet) -> bool:
     return any(s.kind == "archival" and s.start_sec <= time < s.end_sec for s in sheet.silence_windows)
 
 
+def accent_authorized(time, event_id, sheet, config):
+    return not archival_protected(time, sheet) and (config.sfx_silence_policy == "accents" or any(
+        s.start_sec <= time < s.end_sec and event_id in s.accent_event_ids for s in sheet.silence_windows))
+
+
 def schedule(graph: EventGraph, sheet: SpottingSheet, transcript: Transcript, config: RunConfig) -> PacingPlan:
     result = PacingPlan()
     duration = sheet.video_duration_sec
@@ -115,7 +120,7 @@ def schedule(graph: EventGraph, sheet: SpottingSheet, transcript: Transcript, co
         if event.time_sec + 0.025 >= duration:
             decision["reason"] = "insufficient timeline for acoustic landmark"
             continue
-        if protected(event.time_sec, sheet) and config.sfx_silence_policy == "protect":
+        if protected(event.time_sec, sheet) and not accent_authorized(event.time_sec, event.event_id, sheet, config):
             decision["reason"] = "protected punchline silence"
             continue
         major = event.kind in {"black_card", "impact"}
@@ -154,7 +159,8 @@ def schedule(graph: EventGraph, sheet: SpottingSheet, transcript: Transcript, co
                 effect.level_mode, effect.target_rms_dbfs = "active_rms", -28
             else:
                 effect.level_mode = "sample_peak"
-                effect.target_peak_dbfs = -3.5 if effect.category == "sub_drop" else -8
+                effect.target_peak_dbfs = -3.5 if effect.category == "sub_drop" else -9.5 if (
+                    effect.category == "ui_tick" and config.documentary_edit_mode != "off") else -8
                 effect.peak_ceiling_db = -3 if effect.category == "sub_drop" else effect.peak_ceiling_db
     for decision in result.decisions:
         if decision["required"] and not decision["accepted"]:

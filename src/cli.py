@@ -15,6 +15,7 @@ from .preflight import check_environment
 
 PATHS = {"video_path", "script_path", "transcript_path", "spotting_sheet_path", "event_graph_path", "locked_music_path", "output_dir",
          "archival_windows_path", "narrator_reference_path",
+         "documentary_plan_path", "documentary_font_path",
          "local_assets", "google_flow_assets", "elevenlabs_assets", "google_flow_browser_config", "chrome_profile_dir"}
 
 
@@ -29,6 +30,7 @@ def parser():
                        ("event-graph", "event_graph_path"),
                        ("locked-music", "locked_music_path"),
                        ("archival-windows", "archival_windows_path"), ("narrator-reference", "narrator_reference_path"),
+                       ("documentary-plan", "documentary_plan_path"), ("documentary-font", "documentary_font_path"),
                        ("local-assets", "local_assets"), ("google-flow-assets", "google_flow_assets"),
                        ("elevenlabs-assets", "elevenlabs_assets"), ("google-flow-browser-config", "google_flow_browser_config"),
                        ("chrome-profile-dir", "chrome_profile_dir")]:
@@ -38,6 +40,10 @@ def parser():
     p.add_argument("--provider", choices=["none", "local", "elevenlabs", "google_flow", "both_compare"])
     p.add_argument("--planner", choices=["rules", "llm"])
     p.add_argument("--preset", choices=["default", "social_commentary"])
+    p.add_argument("--documentary-edit-mode", choices=["off", "plan", "render"])
+    sfx_source = p.add_mutually_exclusive_group()
+    sfx_source.add_argument("--procedural-sfx", action="store_true", default=None)
+    sfx_source.add_argument("--provider-sfx", dest="procedural_sfx", action="store_false", default=None)
     p.add_argument("--archival-detection", choices=["off", "reference_voice"])
     p.add_argument("--speaker-mismatch-threshold", type=float)
     p.add_argument("--speaker-return-threshold", type=float)

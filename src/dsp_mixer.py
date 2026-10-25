@@ -16,7 +16,7 @@ from .models import RunConfig, SpottingSheet
 from .pacing_models import PacingPlan
 from .rhythm import fit_music
 from .sfx_engine import active_rms_db, crest_sample, level_effect, placement, sample_peak_db, window_loudness
-from .event_scheduler import archival_protected, protected
+from .event_scheduler import accent_authorized, protected
 from .sfx_engine import shape as shape_effect
 
 
@@ -94,8 +94,7 @@ def render_effects(plan: PacingPlan, sheet: SpottingSheet, store, dialogue: Path
                 if voice is not None and lead:
                     voice = np.pad(voice, ((lead, 0), (0, 0)))
                 if (config.sfx_mix_profile == "audible" and item.tier == "accent" and
-                        config.sfx_silence_policy == "accents" and protected(item.visual_time_sec, sheet) and
-                        not archival_protected(item.visual_time_sec, sheet)):
+                        accent_authorized(item.visual_time_sec, item.event_id, sheet, config) and protected(item.visual_time_sec, sheet)):
                     audio, duck_info = base.copy(), {"spectral_duck": "explicit_black_card_accent_unity"}
                 else:
                     audio, duck_info = spectral_duck(base, voice, item.tier)
@@ -110,11 +109,15 @@ def render_effects(plan: PacingPlan, sheet: SpottingSheet, store, dialogue: Path
             audio = audio[:max(0, count - start)]
             if not len(audio):
                 raise PipelineError(f"Effect {item.event_id} falls outside the timeline")
-            if not (item.tier == "accent" and config.sfx_silence_policy == "accents"):
-                audio *= silence_envelope(len(audio), start / SR, sheet)[:, None]
-            else:
-                archive_sheet = sheet.model_copy(update={"silence_windows": [s for s in sheet.silence_windows if s.kind == "archival"]})
-                audio *= silence_envelope(len(audio), start / SR, archive_sheet)[:, None]
+            envelope = silence_envelope(len(audio), start / SR, sheet)
+            if item.tier == "accent":
+                times = start / SR + np.arange(len(audio)) / SR
+                for window in sheet.silence_windows:
+                    if window.kind != "archival" and (config.sfx_silence_policy == "accents" or item.event_id in window.accent_event_ids):
+                        envelope[(times >= window.start_sec) & (times < window.end_sec)] = 1
+                archives = sheet.model_copy(update={"silence_windows": [s for s in sheet.silence_windows if s.kind == "archival"]})
+                envelope *= silence_envelope(len(audio), start / SR, archives)
+            audio *= envelope[:, None]
             if np.max(np.abs(audio), initial=0) < 1e-8:
                 records.append({"event_id": item.event_id, "status": "suppressed_by_silence", "passed": not item.required})
                 continue

@@ -59,6 +59,7 @@ class SilenceWindow(Contract):
     reason: str
     kind: Literal["narrative", "archival"] = "narrative"
     fade_sec: float = Field(default=0.03, ge=0, le=1)
+    accent_event_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def ordered(self):
@@ -199,14 +200,23 @@ class RunConfig(Contract):
     archival_detection: Literal["off", "reference_voice"] = "off"
     speaker_mismatch_threshold: float = Field(default=0.6, ge=0.1, le=0.9)
     speaker_return_threshold: float = Field(default=0.75, ge=0.2, le=0.99)
+    documentary_edit_mode: Literal["off", "plan", "render"] = "off"
+    documentary_plan_path: Path | None = None
+    documentary_font_path: Path | None = None
+    procedural_sfx: bool = False
 
     @model_validator(mode="after")
     def coherent(self):
         if self.preset == "social_commentary":
             # Explicit fields/CLI overrides retain priority over preset defaults.
-            for name, value in {"dialogue_polish": True, "sfx_mode": "accents_only", "outro_music_return": False}.items():
+            defaults = {"dialogue_polish": True, "sfx_mode": "accents_only", "outro_music_return": False,
+                        "documentary_edit_mode": "plan" if self.mode == "script_only" else "render",
+                        "procedural_sfx": True}
+            for name, value in defaults.items():
                 if name not in self.model_fields_set:
                     setattr(self, name, value)
+            if self.documentary_edit_mode != "off" and "sfx_mix_profile" not in self.model_fields_set:
+                self.sfx_mix_profile = "audible"
             if self.narrator_reference_path and "archival_detection" not in self.model_fields_set:
                 self.archival_detection = "reference_voice"
         if not (self.video_path or self.script_path or self.transcript_path):
@@ -215,7 +225,7 @@ class RunConfig(Contract):
             raise ValueError("Asset and video outputs require a provider")
         if self.mode == "final_video" and not self.video_path:
             raise ValueError("final_video requires video_path")
-        if self.provider == "local" and self.mode != "script_only" and not self.local_assets:
+        if self.provider == "local" and self.mode != "script_only" and not self.local_assets and not (self.locked_music_path and self.procedural_sfx):
             raise ValueError("local provider requires local_assets manifest")
         if self.visual_pacing == "render" and (not self.video_path or self.mode != "final_video"):
             raise ValueError("visual_pacing=render requires final_video and a video")

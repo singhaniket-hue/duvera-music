@@ -125,3 +125,28 @@ that the remote workflow has run.
   preset implements the supplied brief and does not claim matching that creator's exact mix.
 - The suite contains 75 tests, including the previous 65 regression tests and rejection of
   an LLM collapsing all chapters into one long loop. Local tests and Ruff checks passed.
+
+## Documentary picture editor — 25 October 2026
+
+- Implemented one source-clock picture/audio/music plan and a rational frame/sample map.
+  Actual CFR video cuts, 20ms room-tone splice bridges, both eye-anchored zoom factors,
+  three graphic styles and mapped word/archive/SFX intervals are exercised.
+- The full local 88-test run passed. A subsequent source/derived music-lock regression
+  also passed, bringing the suite to 89 tests. Ruff, diff whitespace and environment checks
+  passed. Hindi card coverage/shaping was exercised with the official Noto Sans Devanagari
+  font and Pillow RAQM; actual portrait and landscape frames were inspected.
+- A new standalone offline demo rendered a 16s source to 15s/450 frames. The sub-drop's
+  measured crest moved to 8.010s; data/paper effects moved to 0.606s and 4.608s. Original
+  archival samples moved from 6–7s to 5–6s unchanged before mastering, with zero added
+  music there and throughout the black card. Real FFmpeg SFX routing and encoded frame
+  count/duration checks passed. Resume did not repeat the director request.
+- Tests exposed and fixed a quiet-breath deletion risk: the noise-floor estimate now uses
+  the quietest 1% of 20ms blocks, avoiding a speech-heavy estimate on short recordings.
+  This remains a conservative quiet-gap heuristic, not a trained breath classifier.
+- One unified LLM response is tested through a controlled endpoint; automatic Haar eye
+  accuracy and real ASR alignment remain uncalibrated. The synthetic demo uses explicit
+  eye anchors and disables the music vocal gate explicitly. No live LLM, paid provider,
+  Demucs/Resemblyzer model or real room-recording render was validated in this update.
+- Source code and reproducible demo generator are committed; synthetic output media,
+  downloaded fonts and user files are excluded. Graphics are baked into the output picture
+  track; no editable Premiere/Resolve title round-trip is claimed.

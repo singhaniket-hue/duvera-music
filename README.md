@@ -1,6 +1,6 @@
 # Duvera Music Director
 
-Dialogue-aware music direction, optional three-tier sound design, and visual pacing for YouTube videos.
+Dialogue-aware music direction, three-tier sound design, and documentary picture editing for YouTube videos.
 Built for English, Hindi and Hinglish, including Duvera-style reflective narration.
 
 Turn a script or recorded video into:
@@ -237,7 +237,9 @@ original research loudness profile, not a new definition of LUFS or true peak.
 ## Social commentary preset
 
 --preset social_commentary enables a narration chain, a documentary accent palette, and
-chapter-based music variation. Long scripts use 90–150 second editorial chapters; an
+chapter-based music variation, plus the full picture editor: validated quiet-pause cuts,
+eye-anchored zooms, evidence/citation cards and black question cards. Install the edit extra.
+Use --documentary-edit-mode off for the previous audio-only preset. Long scripts use 90–150 second editorial chapters; an
 11:18 transcript receives five chapter stems in the rules preset. Chapter moods/titles
 are proposals, and --planner llm can refine them through your explicitly configured endpoint.
 Chapter splits reuse their chapter music instead of requesting a fresh song per sentence.
@@ -252,6 +254,12 @@ narration chain, and added music/SFX mute across its protected interval.
 
 Read [docs/SOCIAL_COMMENTARY.md](docs/SOCIAL_COMMENTARY.md) for the full setup, JSON
 contracts, vocal-chain measurements and current model/editorial limits.
+Read [docs/DOCUMENTARY_EDITOR.md](docs/DOCUMENTARY_EDITOR.md) for the shared edit clock,
+reviewed visual plans, fonts, procedural SFX and the offline picture/audio demo:
+
+    python scripts/bootstrap.py --extras edit,vocals
+    python scripts/create_documentary_demo.py --dir documentary_demo
+    python -m src.cli --json-config documentary_demo/config.json
 
 ## ElevenLabs
 

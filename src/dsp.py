@@ -311,7 +311,7 @@ def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig
     video = root / f"final_video_{root.name}.mp4"
     # Re-encode for predictable MP4 compatibility, preserving image dimensions and frame rate.
     video_filter = "pad=ceil(iw/2)*2:ceil(ih/2)*2"
-    if visual_source and pacing and pacing.visuals:
+    if config.visual_pacing == "render" and visual_source and pacing and pacing.visuals:
         from .visual_pacing import ffmpeg_filter
         video_filter = ffmpeg_filter(pacing, visual_source)
     ffmpeg("-i", config.video_path, "-i", master, "-map", "0:v:0", "-map", "1:a:0",
@@ -324,7 +324,7 @@ def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig
     passed = (actual_i is not None and actual_tp is not None and
               abs(actual_i - config.target_lufs) <= 1 and actual_tp <= -1)
     visual_qc = None
-    if visual_source and pacing and pacing.visuals:
+    if visual_source:
         stream = next(s for s in probe(video)["streams"] if s["codec_type"] == "video")
         actual_frames = int(stream.get("nb_frames", -1))
         same_rate = Fraction(stream["avg_frame_rate"]) == Fraction(visual_source["rate"])
@@ -335,7 +335,7 @@ def render(dialogue: Path, music: Path, sfx: Path, root: Path, config: RunConfig
     premix.unlink(missing_ok=True)
     return {"master": master.name, "video": video.name, "master_measurement": master_qc,
             "sfx_routing": routing,
-            "visual_pacing": "rendered" if visual_source and pacing and pacing.visuals else "source_picture",
+            "visual_pacing": "documentary_baked" if config.documentary_edit_mode == "render" else "rendered" if visual_source and pacing and pacing.visuals else "source_picture",
             "visual_qc": visual_qc,
             "encoded_measurement": final_qc, "passed": passed,
             "target_lufs": config.target_lufs, "target_peak_db": config.true_peak_db,

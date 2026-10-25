@@ -29,6 +29,7 @@ from .music_continuity import build_locked_stems, music_gap_qc, sha256, validate
 from .archival import ArchivalWindows, archival_windows, protect_archival
 from .documentary import chapter_events, chapter_summary
 from .dialogue_polish import polish_dialogue
+from .procedural_sfx import procedural_jobs
 
 
 def save_json(path: Path, value):
@@ -47,7 +48,7 @@ def _fingerprint(config: RunConfig) -> str:
                     raise PipelineError(f"Input file not found: {value}")
                 stat = value.stat()
                 files[name] = [str(value.resolve()), stat.st_size, stat.st_mtime_ns]
-    return hashlib.sha256(json.dumps(["commentary-v3", data, files], sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(["documentary-editor-v4", data, files], sort_keys=True).encode()).hexdigest()
 
 
 def _branches(config: RunConfig):
@@ -61,13 +62,18 @@ def _branches(config: RunConfig):
 def _gate(config: RunConfig, sheet: SpottingSheet, pacing=None):
     """Validate BOTH branches and the entire generation budget before any paid request."""
     planned = {}
+    procedural = procedural_jobs(pacing, config)
     for name, manifest in _branches(config):
         if manifest:
-            validate_manifest_for_sheet(manifest, sheet, pacing, bool(config.locked_music_path))
+            validate_manifest_for_sheet(manifest, sheet, pacing, bool(config.locked_music_path), procedural)
             planned[name] = {"mode": "imported", "requests": 0, "seconds": 0}
             continue
         jobs = list(generation_jobs(sheet, pacing, bool(config.locked_music_path)))
-        if name == "google_flow" and pacing and pacing.effects:
+        jobs = [j for j in jobs if not (j[1] == "sfx" and j[0].cue_id in procedural)]
+        if not jobs:
+            planned[name] = {"mode": "procedural_only", "requests": 0, "seconds": 0}
+            continue
+        if name == "google_flow" and any(j[1] == "sfx" for j in jobs) and pacing and pacing.effects:
             raise PipelineError("Pacing SFX on the Google branch require imported assets; the music browser UI "
                                 "is not a verified three-tier SFX generator. Supply --google-flow-assets.")
         seconds = sum(j[2] for j in jobs)
@@ -125,15 +131,22 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
         inserts, speaker_scores = archival_windows(config, dialogue, duration, root)
         save_json(archive_path, {"windows": [w.model_dump() for w in inserts], "scores": speaker_scores,
             "mode": config.archival_detection, "resolution_sec": 0.5 if speaker_scores else None,
+            "clock": "source",
             "coverage": "reviewed_and_or_reference_candidates" if inserts or config.archival_detection != "off" else "disabled_no_insert_windows",
             "note": "Reference-voice mismatches are candidates, not speaker identity or proof of archival origin"})
+    documentary = None
+    if config.documentary_edit_mode != "off":
+        from .documentary_pipeline import prepare_documentary
+        documentary = prepare_documentary(config, transcript, duration, dialogue, inserts, plan_only)
+        config, transcript, duration = documentary["config"], documentary["transcript"], documentary["duration"]
+        dialogue, inserts = documentary["dialogue"], documentary["inserts"]
     polish_qc = {"status": "disabled"}
     if config.dialogue_polish and dialogue:
         dialogue, polish_qc = polish_dialogue(dialogue, inserts, root)
     elif config.dialogue_polish:
         polish_qc = {"status": "skipped_no_recorded_audio"}
     save_json(root / "dialogue_polish_qc.json", polish_qc)
-    visuals = analyze_video(config.video_path, duration, config) if config.video_path else []
+    visuals = analyze_video(config.video_path, duration, config) if config.video_path and not documentary else []
     save_json(root / "visual_analysis.json", {
         "events": [v.model_dump() for v in visuals],
         "enabled": config.analyze_visuals,
@@ -146,7 +159,10 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
         with wave.open(str(dialogue), "rb") as w:
             sample = np.frombuffer(w.readframes(60 * SR), "<i2").astype(np.float32).reshape(-1, 2) / 32768
         pulse = prosodic_pulse(sample)
-    if config.spotting_sheet_path:
+    if documentary and documentary["sheet"]:
+        sheet = documentary["sheet"]
+        sheet.dialogue_integrated_lufs = dialogue_lufs
+    elif config.spotting_sheet_path:
         sheet = SpottingSheet.model_validate_json(config.spotting_sheet_path.read_text(encoding="utf-8"))
         if abs(sheet.video_duration_sec - duration) > 0.001:
             raise PipelineError("Edited spotting sheet duration must match media/transcript")
@@ -160,6 +176,8 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
     if abs(sheet.video_duration_sec - duration) > 0.001 or sheet.timing_source != transcript.timing_source:
         raise PipelineError("Cached spotting sheet no longer matches media timing; use a new output directory")
     sheet = protect_archival(sheet, inserts)
+    if documentary and not documentary["sheet"]:
+        sheet.silence_windows += documentary["silence"]
     if config.preset == "social_commentary" and not config.archival_windows_path and config.archival_detection == "off":
         sheet.warnings = list(dict.fromkeys(sheet.warnings + [
             "Archival protection has no windows/reference: supply --archival-windows or --narrator-reference for inserts."]))
@@ -172,8 +190,8 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
         graph = EventGraph.model_validate_json((root / "event_graph.json").read_text(encoding="utf-8"))
         pacing = PacingPlan.model_validate_json((root / "pacing_plan.json").read_text(encoding="utf-8"))
     else:
-        graph = EventGraph.model_validate_json(config.event_graph_path.read_text(encoding="utf-8")) if config.event_graph_path else EventGraph()
-        if config.preset == "social_commentary":
+        graph = documentary["graph"] if documentary else EventGraph.model_validate_json(config.event_graph_path.read_text(encoding="utf-8")) if config.event_graph_path else EventGraph()
+        if config.preset == "social_commentary" and not documentary:
             supplied = {e.event_id for e in graph.events}
             graph = EventGraph(events=graph.events + [e for e in chapter_events(sheet) if e.event_id not in supplied])
         enabled = config.sfx_mode != "none" or config.visual_pacing != "off"
@@ -187,15 +205,18 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
             graph = EventGraph(events=graph.events + additions)
             save_json(root / "pacing_analysis.json", analysis)
         pacing = schedule(graph, sheet, transcript, config)
-    visual_source = validate_render_source(config.video_path) if config.visual_pacing == "render" else None
+    visual_source = validate_render_source(config.video_path) if config.visual_pacing == "render" or (
+        documentary and documentary["report"]["visual_render"]["status"] == "rendered") else None
     save_json(root / "event_graph.json", graph.model_dump(mode="json"))
     save_json(root / "pacing_plan.json", pacing.model_dump(mode="json"))
     save_json(root / "chapter_plan.json", {"preset": config.preset, "chapters": chapter_summary(sheet),
         "note": "Distinct chapter sources; semantic labels and duration-grid fallbacks need editorial review"})
     pacing_sheet_hash.write_text(sheet_hash + "\n")
     export_script(sheet, transcript, config, root)
+    procedural = procedural_jobs(pacing, config)
     jobs = [{"cue_id": c.cue_id, "kind": kind, "duration_seconds": seconds, "prompt": prompt,
-             "loop": getattr(c, "loop", False)}
+             "loop": getattr(c, "loop", False), "source": "procedural" if kind == "sfx" and c.cue_id in procedural else "import_or_provider",
+             "billable_if_generated": not (kind == "sfx" and c.cue_id in procedural)}
             for c, kind, seconds, prompt in generation_jobs(sheet, pacing, bool(config.locked_music_path))]
     save_json(root / "generation_plan.json", {
         "branches": [name for name, _ in _branches(config)] if config.mode != "script_only" else [],
@@ -229,9 +250,9 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
     providers = {}
     try:
         # Open/check Google first, before spending on ElevenLabs in comparison mode.
-        if any(name == "google_flow" and not manifest for name, manifest in _branches(config)):
+        if any(name == "google_flow" and not manifest and planned[name]["requests"] for name, manifest in _branches(config)):
             providers["google_flow"] = GoogleFlowProvider(config.google_flow_browser_config, config.chrome_profile_dir)
-        if any(name == "elevenlabs" and not manifest for name, manifest in _branches(config)):
+        if any(name == "elevenlabs" and not manifest and planned[name]["requests"] for name, manifest in _branches(config)):
             providers["elevenlabs"] = ElevenLabsProvider()
         results = {}
         for name, manifest in _branches(config):
@@ -239,6 +260,7 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
             branch.mkdir(exist_ok=True)
             store = AssetStore(branch / "stems", config, manifest, providers.get(name))
             store.safe_music = {}
+            store.procedural = procedural
             for cue, kind, seconds, prompt in generation_jobs(sheet, pacing, bool(config.locked_music_path)):
                 asset = store.get(cue.cue_id, prompt, seconds, kind, loop=getattr(cue, "loop", False))
                 if kind == "music":
@@ -261,6 +283,7 @@ def _execute(config: RunConfig, plan_only: bool) -> dict:
             qc = {"provider": name, "source": planned[name], "cues": records, "mastering": None,
                   "vocal_policy": config.vocal_policy, "sfx_pacing": sfx_qc, "music_continuity": continuity,
                   "preset": config.preset, "dialogue_polish": polish_qc, "archival_windows": [w.model_dump() for w in inserts],
+                  "documentary_edit": documentary["report"] if documentary else None,
                   "locked_music_sha256": config.locked_music_sha256,
                   "locked_music_vocal_check": guard.reports.get("locked/music"),
                   "vocal_checks": {key.split("/", 1)[1]: value for key, value in guard.reports.items()

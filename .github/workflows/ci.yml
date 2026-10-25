@@ -13,8 +13,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - run: python -m pip install -e ".[dev,cv]"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core
+      - run: python -m pip install -e ".[dev,cv,edit]"
       - run: ruff check .
       - run: python -m unittest discover -s tests -v
       - run: python -m src.cli --check-env

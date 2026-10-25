@@ -39,7 +39,8 @@ Synthetic test fixtures explicitly use off and report disabled_unchecked.
 
 Contracts: src/models.py. CLI: src/cli.py. Pipeline: src/pipeline.py.
 Audio: src/dsp.py and src/media.py. Providers: src/providers/.
-All timeline data is in seconds; convert to frames only at XML export.
+Editorial inputs use source seconds. The documentary editor creates one explicit rational
+frame/sample TimelineMap; every output layer must follow it. XML export also uses frames.
 Preserve dialogue and remove music/SFX during protected silence by default.
 The explicit sfx_silence_policy=accents exception permits only editorial accents, never
 ambience/Foley/music. Never turn it on implicitly to fill a punchline's silence.
@@ -64,10 +65,14 @@ sample and the speaker extra. Do not assume a cold open is the narrator or treat
 similarity as verified identity. Preserve original insert samples and mute added music/SFX.
 Vocal EQ/compression is not dereverberation or fixed per-word LUFS. Chapter labels and
 question timing remain proposals; do not promise reference-video quality from fixtures.
-Visual rendering supports CFR only and never retimes source speech. Cut/pause suggestions
-are review notes, not automatic edits. Use a fresh output directory after changing a plan.
+Read docs/DOCUMENTARY_EDITOR.md for the full preset picture editor. It supports CFR only;
+validated quiet speech gaps can be removed from picture/audio together. Never delete
+timestamped speech, audible breaths or archival samples. The older --visual-pacing path
+still treats pauses as review notes. Do not invent facts/citations or eye coordinates.
+Check font coverage/RAQM, reading holds, shared-clock remapping and frame-count QC.
+Use a fresh output directory after changing a plan.
 
-Install .[dev,cv], then run python -m unittest discover -s tests -v and ruff check . for implementation changes.
+Install .[dev,cv,edit], then run python -m unittest discover -s tests -v and ruff check . for implementation changes.
 Tests must not make billable external calls. Use the offline demo for full render validation.
 Report artistic/provider/NLE limitations honestly.
 

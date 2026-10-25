@@ -39,6 +39,7 @@ class AssetStore:
         self.assets = read_manifest(manifest) if manifest else {"music": {}, "sfx": {}, "downbeats": {}, "loops": {}}
         self.ledger_path = root / "generation_ledger.json"
         self.ledger = json.loads(self.ledger_path.read_text()) if self.ledger_path.exists() else {}
+        self.procedural = {}
 
     def _save(self):
         temp = self.ledger_path.with_suffix(".tmp")
@@ -53,6 +54,19 @@ class AssetStore:
         if cue_id in self.assets[kind]:
             extract_audio(self.assets[kind][cue_id], output)
             return output
+        if kind == "sfx" and cue_id in self.procedural:
+            from ..procedural_sfx import synthesize
+            effect = self.procedural[cue_id]
+            fingerprint = hashlib.sha256(json.dumps(["procedural_v1", effect.category, effect.duration_sec, cue_id]).encode()).hexdigest()
+            entry = self.ledger.get(key)
+            if entry and entry.get("fingerprint") != fingerprint:
+                raise PipelineError("Procedural plan changed; use a fresh output directory")
+            if not (entry and entry.get("status") == "complete" and output.exists()):
+                synthesize(effect.category, max(0.5, effect.duration_sec), output, cue_id)
+                self.ledger[key] = {"fingerprint": fingerprint, "status": "complete", "seconds": 0,
+                                    "mode": "procedural", "category": effect.category}
+                self._save()
+            return output
         if self.provider is None:
             raise PipelineError(f"Manifest is missing {kind} for {cue_id}")
         fingerprint = hashlib.sha256(json.dumps([prompt, duration, kind, loop]).encode()).hexdigest()
@@ -64,7 +78,7 @@ class AssetStore:
                 return output
             raise PipelineError(f"Uncertain prior generation: {key}. Inspect generation_ledger.json and provider "
                                 "billing/history before removing that entry to authorize a retry.")
-        if len(self.ledger) >= self.config.max_requests:
+        if sum(e.get("mode") != "procedural" for e in self.ledger.values()) >= self.config.max_requests:
             raise PipelineError("Generation request budget exhausted")
         if sum(e["seconds"] for e in self.ledger.values()) + duration > self.config.max_generated_seconds:
             raise PipelineError("Generation duration budget exhausted")
@@ -101,10 +115,12 @@ def generation_jobs(sheet: SpottingSheet, pacing=None, locked_music=False):
             yield SimpleNamespace(cue_id=effect.asset_id, loop=effect.tier == "ambience"), "sfx", effect.generation_sec, effect.prompt
 
 
-def validate_manifest_for_sheet(path: Path, sheet: SpottingSheet, pacing=None, locked_music=False):
+def validate_manifest_for_sheet(path: Path, sheet: SpottingSheet, pacing=None, locked_music=False, procedural=None):
     manifest = read_manifest(path)
     for cue, kind, _, _ in generation_jobs(sheet, pacing, locked_music):
         if cue.cue_id not in manifest[kind]:
+            if kind == "sfx" and procedural and cue.cue_id in procedural:
+                continue
             raise PipelineError(f"Manifest {path.name} missing {kind}/{cue.cue_id}")
         probe(manifest[kind][cue.cue_id])
     return manifest
